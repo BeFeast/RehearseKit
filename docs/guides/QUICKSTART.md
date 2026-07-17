@@ -12,11 +12,13 @@ Get RehearseKit up and running in 5 minutes!
 
 ```bash
 # Clone the repository
-git clone https://github.com/UnTypeBeats/RehearseKit.git
+git clone https://github.com/BeFeast/RehearseKit.git
 cd RehearseKit
 
-# Start all services
-docker-compose up
+# Configure local defaults and start all services
+cp config/.env.example .env
+docker compose build
+docker compose up -d
 ```
 
 Wait 30-60 seconds for all services to start. You'll see:
@@ -35,6 +37,12 @@ Open your browser to:
 - **Frontend**: http://localhost:3000
 - **API Docs**: http://localhost:8000/docs
 - **API Health**: http://localhost:8000/api/health
+
+Verify every public service after startup:
+
+```bash
+./scripts/smoke.sh
+```
 
 ## Create Your First Job
 
@@ -144,21 +152,21 @@ Steps breakdown:
 docker system info | grep -E "CPUs|Memory"
 
 # Restart services
-docker-compose restart
+docker compose restart
 
 # Full rebuild
-docker-compose down
-docker-compose up --build
+docker compose down
+docker compose up --build
 ```
 
 ### Job stuck in PENDING
 
 ```bash
 # Check worker status
-docker-compose logs worker | tail -50
+docker compose logs worker | tail -50
 
 # Restart worker
-docker-compose restart worker
+docker compose restart worker
 ```
 
 ### Job failed
@@ -168,7 +176,7 @@ docker-compose restart worker
 curl http://localhost:8000/api/jobs/$JOB_ID | jq '.error_message'
 
 # Check worker logs
-docker-compose logs worker | grep -A 10 $JOB_ID
+docker compose logs worker | grep -A 10 $JOB_ID
 ```
 
 ### Port already in use
@@ -187,7 +195,7 @@ Complete example from start to finish:
 
 ```bash
 # 1. Start services
-docker-compose up -d
+docker compose up -d
 
 # 2. Create a job
 JOB_ID=$(curl -s -X POST http://localhost:8000/api/jobs/create \
@@ -255,4 +263,3 @@ my_song_RehearseKit.zip/
 ---
 
 Built with ❤️ for musicians who want to spend less time on setup and more time making music.
-

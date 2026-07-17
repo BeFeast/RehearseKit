@@ -37,21 +37,30 @@ Transform any audio source into a ready-to-use rehearsal project in minutes. Reh
 
 1. **Clone and configure**
    ```bash
-   git clone https://github.com/UnTypeBeats/RehearseKit.git
+   git clone https://github.com/BeFeast/RehearseKit.git
    cd RehearseKit
    cp config/.env.example .env
-   # Edit .env with your configuration
+   # The example values are enough for local startup; cloud credentials are optional
    ```
 
 2. **Start all services**
    ```bash
-   docker-compose up
+   docker compose build
+   docker compose up -d
    ```
 
 3. **Access the application**
    - Frontend: http://localhost:3000
    - Backend API: http://localhost:8000
    - API Docs: http://localhost:8000/docs
+
+4. **Verify the stack**
+   ```bash
+   ./scripts/smoke.sh
+   ```
+
+   The smoke script checks backend dependencies and `/docs`, the frontend root,
+   and the websocket health endpoint. Stop the stack with `docker compose down`.
 
 ### Prerequisites
 - Docker Desktop (Mac) or Docker Engine (Linux/WSL)
@@ -135,7 +144,7 @@ cd infrastructure/truenas
 ### Docker Compose (Production)
 ```bash
 # Use production configuration
-docker-compose -f config/docker-compose.prod.yml up -d
+docker compose -f config/docker-compose.prod.yml up -d
 ```
 
 ### Deployment Scripts
@@ -198,4 +207,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 Built with ❤️ for musicians who want to spend less time on setup and more time making music.
-
