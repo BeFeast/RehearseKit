@@ -1,6 +1,6 @@
 # FastAPI and web framework
-fastapi>=0.109.2
-uvicorn[standard]>=0.27.1
+fastapi==0.109.2
+uvicorn[standard]==0.27.1
 python-multipart>=0.0.9
 
 # Database
@@ -52,4 +52,3 @@ pytest>=7.4.0
 pytest-asyncio>=0.21.0
 pytest-mock>=3.11.0
 httpx>=0.26.0
-

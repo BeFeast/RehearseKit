@@ -1,0 +1,136 @@
+name: rehearsekit
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rehearsekit}
+      POSTGRES_USER: ${POSTGRES_USER:-rehearsekit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev-password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    image: rehearsekit-backend:local
+    build:
+      context: ./backend
+    environment: &backend-environment
+      APP_NAME: ${APP_NAME:-RehearseKit}
+      APP_ENV: ${APP_ENV:-development}
+      DEBUG: ${DEBUG:-false}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://rehearsekit:dev-password@postgres:5432/rehearsekit}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      STORAGE_MODE: local
+      LOCAL_STORAGE_PATH: /tmp/storage
+      GCS_BUCKET_UPLOADS: ${GCS_BUCKET_UPLOADS:-rehearsekit-uploads}
+      GCS_BUCKET_STEMS: ${GCS_BUCKET_STEMS:-rehearsekit-stems}
+      GCS_BUCKET_PACKAGES: ${GCS_BUCKET_PACKAGES:-rehearsekit-packages}
+      CORS_ORIGINS: '["http://localhost:3000","http://localhost:8000"]'
+      JOB_RETENTION_DAYS: ${JOB_RETENTION_DAYS:-7}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-development-secret-change-me-now}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3000/auth/callback/google}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+    ports:
+      - "8000:8000"
+    volumes:
+      - app-storage:/tmp/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health')); assert data['status'] == 'healthy'"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  worker:
+    image: rehearsekit-backend:local
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=1
+    environment: *backend-environment
+    volumes:
+      - app-storage:/tmp/storage
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    init: true
+    restart: unless-stopped
+
+  websocket:
+    build:
+      context: ./websocket
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    ports:
+      - "8001:8001"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8001/health')); assert data['status'] == 'healthy'"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+      websocket:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  app-storage:
