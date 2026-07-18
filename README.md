@@ -71,6 +71,46 @@ For detailed setup instructions, see [`docs/guides/local-development.md`](docs/g
 
 ---
 
+## Local development
+
+Install [uv](https://docs.astral.sh/uv/) and [Bun](https://bun.sh/), then run the default local checks from the repository root:
+
+```bash
+./scripts/verify.sh
+```
+
+This installs lightweight backend test dependencies with uv, then runs backend pytest plus frontend lint and unit tests with Bun. It does not start Docker services or install GPU/model dependencies. The heavier suites are explicit:
+
+```bash
+./scripts/verify.sh --e2e  # Playwright end-to-end tests
+./scripts/verify.sh --gpu  # Backend tests with full audio/GPU dependencies
+```
+
+Run and build each application directly with:
+
+```bash
+# Backend (FastAPI)
+cp config/.env.example backend/.env
+cd backend
+uv run --python 3.11 --with-requirements requirements.txt uvicorn app.main:app --reload
+
+# Frontend (Next.js)
+cd frontend
+bun install --frozen-lockfile
+bun run dev
+bun run build
+```
+
+Targeted test commands:
+
+```bash
+./backend/scripts/run_tests.sh
+cd frontend && bun run lint && bun run test -- --runInBand
+cd frontend && bun run test:e2e  # opt-in; requires Playwright browser support
+```
+
+---
+
 ## 📁 Project Structure
 
 ```
