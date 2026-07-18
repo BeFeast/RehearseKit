@@ -12,6 +12,8 @@ from app.models.user import User
 from app.core.security import decode_token, verify_token_type
 from app.core.exceptions import AuthenticationError, TokenError, GoogleAuthError
 
+pytestmark = pytest.mark.integration
+
 
 class TestGoogleAuthentication:
     """Test Google OAuth authentication"""
