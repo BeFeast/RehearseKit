@@ -1,0 +1,25 @@
+# Lightweight dependencies for backend API tests in pull-request CI.
+# Audio model/runtime packages (torch, torchaudio, demucs) are intentionally
+# excluded because the current API tests do not invoke stem separation.
+fastapi>=0.109.2
+python-multipart>=0.0.9
+sqlalchemy[asyncio]>=2.0.27
+aiosqlite>=0.20.0
+celery>=5.3.6
+redis>=5.0.1
+pydantic[email]>=2.6.1
+pydantic-settings>=2.1.0
+google-cloud-storage>=2.14.0
+yt-dlp>=2025.10.14
+numpy<2.0.0
+librosa>=0.10.1
+soundfile>=0.12.1
+mutagen>=1.47.0
+aiofiles>=23.2.1
+httpx>=0.26.0,<0.28.0
+bcrypt>=4.1.0
+python-jose[cryptography]>=3.3.0
+google-auth>=2.28.0
+slowapi>=0.1.9
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

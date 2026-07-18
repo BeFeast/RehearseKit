@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from unittest.mock import Mock, AsyncMock
 
 from app.main import app
+from app.api.auth import limiter as auth_limiter
 from app.core.database import get_db, Base
 from app.core.config import settings
 from app.models.user import User
@@ -39,6 +40,16 @@ def event_loop() -> Generator:
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiters():
+    """Keep rate-limit counters isolated between tests."""
+    app.state.limiter.reset()
+    auth_limiter.reset()
+    yield
+    app.state.limiter.reset()
+    auth_limiter.reset()
 
 
 @pytest.fixture(scope="function")

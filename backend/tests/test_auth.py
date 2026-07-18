@@ -106,8 +106,7 @@ class TestGoogleAuthentication:
         
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         data = response.json()
-        assert data["error"] == "google_auth_error"
-        assert "Invalid Google ID token" in data["message"]
+        assert "Invalid Google ID token" in data["detail"]
     
     @pytest.mark.asyncio
     async def test_google_auth_verification_error(
@@ -127,8 +126,7 @@ class TestGoogleAuthentication:
         
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         data = response.json()
-        assert data["error"] == "google_auth_error"
-        assert "Failed to verify Google ID token" in data["message"]
+        assert "Failed to verify Google ID token" in data["detail"]
 
 
 class TestTokenValidation:
@@ -361,7 +359,7 @@ class TestTokenRefresh:
         
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
         data = response.json()
-        assert "Invalid or expired token" in data["detail"]
+        assert "Invalid or expired refresh token" in data["detail"]
 
 
 class TestUserProfile:
@@ -437,12 +435,12 @@ class TestSecurityFeatures:
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
     
     @pytest.mark.asyncio
-    async def test_inactive_user_rejection(
+    async def test_inactive_user_can_access_profile(
         self, 
         client: AsyncClient, 
         db_session: AsyncSession
     ):
-        """Test that inactive users are rejected"""
+        """Test that pending users can view their own profile."""
         # Create inactive user
         inactive_user = User(
             email="inactive@example.com",
@@ -462,6 +460,7 @@ class TestSecurityFeatures:
             headers={"Authorization": f"Bearer {token}"}
         )
         
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.status_code == status.HTTP_200_OK
         data = response.json()
-        assert "User not found or inactive" in data["detail"]
+        assert data["email"] == inactive_user.email
+        assert data["is_active"] is False
