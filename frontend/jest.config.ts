@@ -49,6 +49,12 @@ const config: Config = {
     '!**/audio-uploader.tsx',
     '!**/audio-waveform.tsx',
     '!**/stem-mixer.tsx',
+    // Streaming lab browser glue (AudioContext/AudioWorklet/fetch, verified in Chrome)
+    '!**/lib/lab-stream/engine.ts',
+    '!**/lib/lab-stream/stem-stream.ts',
+    '!**/lib/lab-stream/memory.ts',
+    '!**/lib/lab-stream/testing/**',
+    '!**/app/lab/**',
     // Exclude config file
     '!**/playwright.config.ts',
   ],
