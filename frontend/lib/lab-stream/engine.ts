@@ -97,6 +97,7 @@ export class StreamEngine {
   private muted: boolean[] = [];
   private gainValues: number[] = [];
   private listeners = new Set<(state: EngineState) => void>();
+  private resumeInFlight: Promise<void> | null = null;
 
   constructor(options: EngineOptions) {
     if (options.stems.length === 0) throw new Error('at least one stem is required');
@@ -359,10 +360,16 @@ export class StreamEngine {
    */
   private resumeContext(): void {
     const ctx = this.ctx;
-    if (!ctx || ctx.state === 'running') return;
-    void ctx.resume().catch((err: unknown) => {
-      this.fail(`AudioContext resume failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
+    if (!ctx || ctx.state === 'running' || this.resumeInFlight) return;
+    this.resumeInFlight = ctx
+      .resume()
+      .catch((err: unknown) => {
+        if (this.stateValue === 'error') return;
+        this.fail(`AudioContext resume failed: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        this.resumeInFlight = null;
+      });
   }
 
   private startFrom(frame: number): void {
