@@ -97,6 +97,7 @@ export class StreamEngine {
   private muted: boolean[] = [];
   private gainValues: number[] = [];
   private listeners = new Set<(state: EngineState) => void>();
+  private resumeInFlight: Promise<void> | null = null;
 
   constructor(options: EngineOptions) {
     if (options.stems.length === 0) throw new Error('at least one stem is required');
@@ -173,6 +174,12 @@ export class StreamEngine {
       processorOptions: { sab, layout, ctrl: CTRL, state: STATE },
     });
     node.port.onmessage = (event: MessageEvent<WorkletMessage>) => this.onWorkletMessage(event.data);
+    ctx.onstatechange = () => {
+      if (ctx.state !== 'running' && (this.stateValue === 'priming' || this.stateValue === 'playing')) {
+        this.resumeContext();
+      }
+      this.notify();
+    };
     const master = ctx.createGain();
     master.gain.value = 0;
     master.connect(ctx.destination);
@@ -345,9 +352,30 @@ export class StreamEngine {
     }
   }
 
+  /**
+   * Chrome suspends an AudioContext under its autoplay policy or when the
+   * output device is interrupted; the worklet's flush acknowledgement only
+   * runs while the audio thread is running, so every transport start must
+   * make sure the context is resumed or the engine would sit in 'priming'.
+   */
+  private resumeContext(): void {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state === 'running' || this.resumeInFlight) return;
+    this.resumeInFlight = ctx
+      .resume()
+      .catch((err: unknown) => {
+        if (this.stateValue === 'error') return;
+        this.fail(`AudioContext resume failed: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        this.resumeInFlight = null;
+      });
+  }
+
   private startFrom(frame: number): void {
     if (!this.node || !this.rings) return;
     this.seekStartedAt = performance.now();
+    this.resumeContext();
     this.haltStream();
     this.anchorFrame = frame;
     this.errorMessage = null;
