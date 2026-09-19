@@ -1,0 +1,181 @@
+/* RehearseKit SPA stylesheet.
+   Order matters: tokens (custom properties) → Tailwind (utilities, mapped onto
+   the tokens through @theme) → the design's shared chrome (screen.css,
+   ported verbatim from the handoff) → app-specific additions below. */
+@import './tokens.css';
+@import 'tailwindcss';
+@import './screen.css';
+
+@theme {
+  --color-bg: var(--rk-color-bg);
+  --color-panel: var(--rk-color-panel);
+  --color-panel-2: var(--rk-color-panel-2);
+  --color-raise: var(--rk-color-raise);
+  --color-ink: var(--rk-color-ink);
+  --color-ink-muted: var(--rk-color-ink-muted);
+  --color-line: var(--rk-color-line);
+  --color-well: var(--rk-color-well);
+  --color-led-off: var(--rk-color-led-off);
+  --color-copper: var(--rk-color-copper);
+  --color-copper-light: var(--rk-color-copper-light);
+  --color-lcd: var(--rk-color-lcd);
+  --color-knob: var(--rk-color-knob);
+  --color-knob-2: var(--rk-color-knob-2);
+  --color-knob-line: var(--rk-color-knob-line);
+  --color-on-copper: var(--rk-color-on-copper);
+  --color-wave-main: var(--rk-color-wave-main);
+  --color-stem-vocals: var(--rk-color-stem-vocals);
+  --color-stem-drums: var(--rk-color-stem-drums);
+  --color-stem-bass: var(--rk-color-stem-bass);
+  --color-stem-other: var(--rk-color-stem-other);
+  --color-stem-guitar: var(--rk-color-stem-guitar);
+  --color-stem-piano: var(--rk-color-stem-piano);
+  --color-status-success: var(--rk-color-status-success);
+  --color-status-warning: var(--rk-color-status-warning);
+  --color-status-danger: var(--rk-color-status-danger);
+  --color-status-info: var(--rk-color-status-info);
+
+  --font-sans: var(--rk-font-sans);
+  --font-mono: var(--rk-font-mono);
+
+  --text-2xs: 8px;
+  --text-xs: 9px;
+  --text-sm: 10px;
+  --text-md: 11px;
+  --text-base: 12.5px;
+  --text-lg: 13.5px;
+  --text-xl: 15px;
+  --text-2xl: 17px;
+  --text-3xl: 19px;
+  --text-4xl: 27px;
+
+  --spacing-1: 2px;
+  --spacing-2: 4px;
+  --spacing-3: 6px;
+  --spacing-4: 8px;
+  --spacing-5: 10px;
+  --spacing-6: 12px;
+  --spacing-7: 14px;
+  --spacing-8: 16px;
+  --spacing-9: 20px;
+  --spacing-10: 22px;
+  --spacing-11: 26px;
+  --spacing-12: 32px;
+  --spacing-13: 40px;
+  --spacing-14: 56px;
+  --spacing-15: 72px;
+
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-pill: 999px;
+  --radius-round: 50%;
+
+  --shadow-panel-raise: var(--rk-shadow-panel-raise);
+  --shadow-well-inset: var(--rk-shadow-well-inset);
+  --shadow-track-inset: var(--rk-shadow-track-inset);
+  --shadow-cap: var(--rk-shadow-cap);
+  --shadow-knob: var(--rk-shadow-knob);
+  --shadow-button: var(--rk-shadow-button);
+  --shadow-overlay: var(--rk-shadow-overlay);
+
+  --breakpoint-sm: 390px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+  --breakpoint-2xl: 1536px;
+}
+
+/* Tailwind's preflight resets button/heading styles the design relies on;
+   screen.css restores the ones it uses. A few extras the SPA needs: */
+@layer base {
+  html, body, #root { min-height: 100%; }
+  button { color: inherit; }
+  h1, h2, h3, h4 { font-size: inherit; font-weight: inherit; }
+  img, svg { display: inline-block; vertical-align: middle; }
+  /* preflight sets border-style: solid on hr; the design's fader ticks are borderless */
+  hr { border-style: none; }
+}
+
+/* ---------- app additions (same token discipline as screen.css) ---------- */
+
+/* six-stem models: the design's recommendation is stretch up to six strips */
+.rk-mixer[data-stems="5"] { grid-template-columns: repeat(5, minmax(0,1fr)) 1.02fr; }
+.rk-mixer[data-stems="6"] { grid-template-columns: repeat(6, minmax(0,1fr)) 1.02fr; }
+
+/* extra stem identity colours (guitar / piano) — kept close to the four originals */
+:root {
+  --rk-color-stem-guitar: #b08a5a;
+  --rk-color-stem-piano: #7f8fa6;
+}
+
+/* inline icons: the SVGs use stroke="currentColor" so they follow the theme */
+.rk-icon { display: inline-flex; flex: none; width: 16px; height: 16px; line-height: 0; }
+.rk-icon svg { width: 100%; height: 100%; display: block; }
+
+/* loop region keeps its geometry when LOOP is off, at a lower tint */
+.rk-wave-loop[data-enabled="false"] { opacity: .45; }
+.rk-loop-handle[data-enabled="false"] b, .rk-loop-handle[data-enabled="false"] i { opacity: .55; }
+.rk-wave canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.rk-wave[data-scrubbing="true"] { cursor: ew-resize; }
+
+/* fader cap / knob interaction states from components/slider/spec.md */
+.rk-fader:hover .rk-cap { filter: brightness(1.04); }
+.rk-fader[data-dragging="true"] .rk-cap { box-shadow: 0 3px 6px rgba(50,32,20,0.40), inset 0 1px 0 rgba(255,255,255,0.35); }
+.rk-fader, .rk-mgain, .rk-loop-handle, .rk-wave { touch-action: none; user-select: none; }
+
+/* without the knob block the stem strips are shorter than the master (BPM
+   tile); let the fader block take the slack so every strip keeps one height */
+.rk-mixer .rk-strip .rk-faderrow { flex: 1; align-items: center; }
+
+/* strip: silenced-by-solo is not muted — readout −∞ and dark meter only */
+.rk-strip[data-dead="true"] .rk-meter i { height: 0 !important; }
+
+/* muted/disabled mixer while loading (state-loading.html) */
+.rk-mixer-dim { opacity: .45; pointer-events: none; }
+
+/* toast stacking + motion (components/toast/spec.md) */
+.rk-toastwrap { position: fixed; display: flex; flex-direction: column-reverse; gap: var(--rk-space-4); }
+.rk-toast { animation: rk-toast-in var(--rk-duration-normal) var(--rk-ease-out); }
+@keyframes rk-toast-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+.rk-toast--info { border-left: 3px solid var(--rk-color-copper); }
+.rk-toast .rk-toast-x { border: 0; width: auto; height: auto; }
+
+/* dialog scrim as a real overlay */
+.rk-scrim--modal { position: fixed; inset: 0; align-items: center; z-index: var(--rk-z-dialog); min-height: 0; }
+
+/* header extras */
+.rk-theme-switch { display: inline-flex; align-items: center; gap: var(--rk-space-3); height: 30px; padding: 0 var(--rk-space-5); border: 1px solid var(--rk-color-line); border-radius: var(--rk-radius-pill); background: var(--rk-color-raise); color: var(--rk-color-ink-muted); font-family: var(--rk-font-mono); font-size: var(--rk-font-size-2xs); font-weight: var(--rk-font-weight-bold); letter-spacing: var(--rk-tracking-wide); cursor: pointer; }
+.rk-theme-switch:hover { color: var(--rk-color-ink); background: var(--rk-color-panel-2); }
+@media (max-width: 720px) { .rk-theme-switch { display: none; } }
+.rk-status-dot[data-state="degraded"] { background: var(--rk-color-status-warning); }
+.rk-status-dot[data-state="down"] { background: var(--rk-color-status-danger); }
+.rk-nav a { cursor: pointer; }
+
+/* visually hidden (labels the design keeps for assistive tech) */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* file input behind the dropzone */
+.rk-drop input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.rk-drop { position: relative; }
+
+/* mobile player breakpoint: below 560 the console is replaced by the player */
+.rk-only-mobile { display: none; }
+@media (max-width: 559px) {
+  .rk-only-desktop { display: none !important; }
+  .rk-only-mobile { display: block; }
+}
+
+/* the design's 390 layout for the landing feature grid and stat tiles */
+@media (max-width: 720px) {
+  .rk-features { grid-template-columns: minmax(0,1fr) !important; }
+  .rk-formgrid { grid-template-columns: minmax(0,1fr) !important; }
+}
+
+/* progress bars ease forward (job-row spec) */
+.rk-progress > span { transition: width var(--rk-duration-slow) var(--rk-ease-standard); }
+
+/* details block on the error boundary */
+.rk-detail pre { margin: var(--rk-space-5) 0 0; padding: var(--rk-space-6); border-radius: var(--rk-radius-md); background: var(--rk-color-well); font-size: var(--rk-font-size-md); white-space: pre-wrap; }

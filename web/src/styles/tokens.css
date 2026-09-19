@@ -1,0 +1,167 @@
+/* RehearseKit design tokens — CSS custom properties (handoff tokens/tokens.css, minus the Google Fonts import: JetBrains Mono is self-hosted via @fontsource).
+   Light theme on :root, dark theme on [data-theme="dark"], alternate mid-tone on [data-theme="slate"].
+   Every colour and font in the handoff package resolves through these variables. */
+
+
+:root {
+  /* color — light ("sand" console finish) */
+  --rk-color-bg: #e9e4dc;
+  --rk-color-panel: #ded8ce;
+  --rk-color-panel-2: #d5cec3;
+  --rk-color-raise: #e5e0d7;
+  --rk-color-ink: #2f2a24;
+  --rk-color-ink-muted: #726a5d;
+  --rk-color-line: #c6bdaf;
+  --rk-color-well: #c9c1b3;
+  --rk-color-led-off: #bbb2a3;
+  --rk-color-copper: #a8724d;
+  --rk-color-copper-light: #c99a75;
+  --rk-color-lcd: #d8d1c1;
+  --rk-color-knob: #9a9184;
+  --rk-color-knob-2: #6c6457;
+  --rk-color-knob-line: #f1ece3;
+  --rk-color-on-copper: #fbf7f2;
+  --rk-color-wave-main: #8b8272;
+
+  /* color — stem identity (theme independent) */
+  --rk-color-stem-vocals: #c9748c;
+  --rk-color-stem-drums: #c08f4a;
+  --rk-color-stem-bass: #6b81b0;
+  --rk-color-stem-other: #8f9a8b;
+
+  /* color — status (theme independent) */
+  --rk-color-status-success: #7f9a6d;
+  --rk-color-status-warning: #c9a24a;
+  --rk-color-status-danger: #b5654e;
+  --rk-color-status-info: #6b81b0;
+
+  /* typography */
+  --rk-font-sans: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --rk-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --rk-font-size-2xs: 8px;
+  --rk-font-size-xs: 9px;
+  --rk-font-size-sm: 10px;
+  --rk-font-size-md: 11px;
+  --rk-font-size-base: 12.5px;
+  --rk-font-size-lg: 13.5px;
+  --rk-font-size-xl: 15px;
+  --rk-font-size-2xl: 17px;
+  --rk-font-size-3xl: 19px;
+  --rk-font-size-4xl: 27px;
+  --rk-font-weight-regular: 400;
+  --rk-font-weight-medium: 500;
+  --rk-font-weight-semibold: 600;
+  --rk-font-weight-bold: 700;
+  --rk-line-height-tight: 1;
+  --rk-line-height-snug: 1.2;
+  --rk-line-height-normal: 1.4;
+  --rk-line-height-relaxed: 1.6;
+  --rk-tracking-tight: -0.015em;
+  --rk-tracking-normal: 0em;
+  --rk-tracking-wide: 0.08em;
+  --rk-tracking-wider: 0.14em;
+  --rk-tracking-widest: 0.2em;
+
+  /* spacing */
+  --rk-space-0: 0px;
+  --rk-space-1: 2px;
+  --rk-space-2: 4px;
+  --rk-space-3: 6px;
+  --rk-space-4: 8px;
+  --rk-space-5: 10px;
+  --rk-space-6: 12px;
+  --rk-space-7: 14px;
+  --rk-space-8: 16px;
+  --rk-space-9: 20px;
+  --rk-space-10: 22px;
+  --rk-space-11: 26px;
+  --rk-space-12: 32px;
+  --rk-space-13: 40px;
+  --rk-space-14: 56px;
+  --rk-space-15: 72px;
+
+  /* radii */
+  --rk-radius-none: 0px;
+  --rk-radius-xs: 3px;
+  --rk-radius-sm: 4px;
+  --rk-radius-md: 6px;
+  --rk-radius-lg: 8px;
+  --rk-radius-xl: 10px;
+  --rk-radius-pill: 999px;
+  --rk-radius-round: 50%;
+
+  /* shadows */
+  --rk-shadow-panel-raise: inset 0 1px 0 rgba(255,255,255,0.4), 0 6px 18px rgba(60,48,34,0.10);
+  --rk-shadow-well-inset: inset 0 2px 5px rgba(0,0,0,0.22);
+  --rk-shadow-track-inset: inset 0 1px 3px rgba(0,0,0,0.35);
+  --rk-shadow-cap: 0 2px 4px rgba(50,32,20,0.30), inset 0 1px 0 rgba(255,255,255,0.35);
+  --rk-shadow-knob: 0 1px 2px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.16);
+  --rk-shadow-button: 0 1px 2px rgba(60,40,25,0.22);
+  --rk-shadow-overlay: 0 12px 32px rgba(40,30,20,0.28);
+
+  /* z-index */
+  --rk-z-base: 0;
+  --rk-z-sticky: 50;
+  --rk-z-dropdown: 100;
+  --rk-z-overlay: 200;
+  --rk-z-dialog: 300;
+  --rk-z-toast: 400;
+
+  /* motion */
+  --rk-duration-instant: 80ms;
+  --rk-duration-fast: 120ms;
+  --rk-duration-normal: 180ms;
+  --rk-duration-slow: 280ms;
+  --rk-duration-meter: 33ms;
+  --rk-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --rk-ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --rk-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --rk-ease-linear: linear;
+
+  /* breakpoints (for reference; media queries cannot read vars) */
+  --rk-bp-sm: 390px;
+  --rk-bp-md: 768px;
+  --rk-bp-lg: 1024px;
+  --rk-bp-xl: 1280px;
+  --rk-bp-2xl: 1536px;
+}
+
+[data-theme="dark"] {
+  --rk-color-bg: #1d1b19;
+  --rk-color-panel: #252220;
+  --rk-color-panel-2: #2c2927;
+  --rk-color-raise: #302c29;
+  --rk-color-ink: #ded7cd;
+  --rk-color-ink-muted: #8d8579;
+  --rk-color-line: #171514;
+  --rk-color-well: #1b1918;
+  --rk-color-led-off: #3b3632;
+  --rk-color-copper: #bb845b;
+  --rk-color-copper-light: #d2a179;
+  --rk-color-lcd: #171514;
+  --rk-color-knob: #57524c;
+  --rk-color-knob-2: #34302c;
+  --rk-color-knob-line: #ded6cb;
+  --rk-color-on-copper: #fbf7f2;
+  --rk-color-wave-main: #7d756a;
+}
+
+[data-theme="slate"] {
+  --rk-color-bg: #3e4249;
+  --rk-color-panel: #45494f;
+  --rk-color-panel-2: #4b5057;
+  --rk-color-raise: #4e535a;
+  --rk-color-ink: #e2e0da;
+  --rk-color-ink-muted: #a29b91;
+  --rk-color-line: #35383d;
+  --rk-color-well: #383b41;
+  --rk-color-led-off: #525760;
+  --rk-color-copper: #c08a63;
+  --rk-color-copper-light: #d3a483;
+  --rk-color-lcd: #31343a;
+  --rk-color-knob: #71767e;
+  --rk-color-knob-2: #474c53;
+  --rk-color-knob-line: #e8e5df;
+  --rk-color-on-copper: #fbf7f2;
+  --rk-color-wave-main: #8d949e;
+}
