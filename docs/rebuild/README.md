@@ -542,10 +542,17 @@ bun run dev          # http://127.0.0.1:5173, proxies /api, /healthz, /readyz to
 bun run typecheck    # tsc -b
 bun run lint         # eslint
 bun run test         # vitest (engine, decibel, format, peaks, mix-state, stages, api, RTL)
-The dev server sends `Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: credentialless` on every response, which the
-player needs for `SharedArrayBuffer`. `rk serve` sends the same pair on
-`/jobs` and `/jobs/*` (see `internal/api/static.go`).
+`rk serve` sends `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: credentialless` on the job page `/jobs/{id}`
+only (see `internal/api/static.go`): the player needs the pair for
+`SharedArrayBuffer`, but the same COOP blocks the Google sign-in popup, so
+`/`, `/jobs` and every other page stay un-isolated. The dev and preview
+servers scope the headers the same way (`vite.config.ts`). Isolation is a
+per-document property, so the SPA turns any navigation that crosses that
+boundary into a full page load (`lib/isolation.ts`, `components/AppLink`,
+`lib/use-app-navigate`), and "Sign in" on the job page hands off to
+`/jobs?signin=1&next=/jobs/{id}`, where the dialog opens and returns after
+sign-in.
 ### Build and embed
 cd web && bun run build      # clears dist/assets, tsc -b, vite build → web/dist
 cd .. && go build ./cmd/rk   # embeds web/dist
@@ -560,7 +567,7 @@ JetBrains Mono is self-hosted through `@fontsource/jetbrains-mono`
 The SPA is written against the full design; routes the API does not have
 yet fall back rather than break:
 | Route | Behaviour now |
-| `POST /auth/google` (501) | Google button shows "coming back soon"; email + password works |
+| `POST /auth/google` (501, `RK_GOOGLE_CLIENT_ID` empty) | the dialog's Google button explains sign-in is not enabled on this server; with a client id it renders the GIS button (popup flow, no One Tap) and posts the credential |
 | `POST /youtube/preview` (404) | URL preview card reads "Preview unavailable — continue anyway" |
 | `GET/PUT /jobs/{id}/mix` (404) | mix state (faders, mute/solo, loop, selected strip) mirrors to `localStorage` |
 | `GET /jobs/{id}/download` (404) | Download button probes with HEAD and explains the package lands with the worker |

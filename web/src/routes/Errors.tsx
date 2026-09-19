@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
-import { useNavigate, useRouter } from '@tanstack/react-router';
+import { useRouter } from '@tanstack/react-router';
 import { useAuth } from '../auth/AuthProvider';
+import { useAppNavigate } from '../lib/use-app-navigate';
 import { lastSeenRequestId } from '../api/client';
 import { Icon } from '../components/Icon';
 import { ILLUSTRATIONS } from '../components/EmptyState';
@@ -27,7 +28,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 
 /** screens/09-not-found/index.html */
 export function NotFoundScreen() {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const { user } = useAuth();
   useEffect(() => {
     document.title = 'Not found — RehearseKit';
@@ -62,7 +63,7 @@ export function NotFoundScreen() {
 
 /** screens/09-not-found/state-error-boundary.html */
 export function ErrorScreen({ error, reset }: { error: unknown; reset?: () => void }) {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const router = useRouter();
   const { user } = useAuth();
   const incident = useMemo(() => lastSeenRequestId() ?? crypto.randomUUID(), []);

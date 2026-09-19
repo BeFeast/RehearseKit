@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
+import { useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import * as api from '../api';
 import { useAuth } from '../auth/AuthProvider';
 import { initials } from '../lib/format';
 import { toggleTheme } from '../lib/theme';
+import { useAppNavigate } from '../lib/use-app-navigate';
 import { useTheme } from '../lib/use-theme';
+import { AppLink } from './AppLink';
 import { Icon } from './Icon';
 import { LogoMark } from './Logo';
 
@@ -16,7 +18,7 @@ import { LogoMark } from './Logo';
  */
 export function Header() {
   const { user, openSignIn, signOut } = useAuth();
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const path = useRouterState({ select: (s) => s.location.pathname });
   const theme = useTheme();
   const pendingRoute = path === '/pending-approval';
@@ -47,18 +49,18 @@ export function Header() {
   return (
     <header className="rk-header">
       <div className="rk-shell rk-header-inner">
-        <Link className="rk-brand" to="/">
+        <AppLink className="rk-brand" to="/">
           <LogoMark />
           <span>RehearseKit</span>
-        </Link>
+        </AppLink>
         {!pendingRoute && (
           <nav className="rk-nav" aria-label="Primary">
-            <Link to="/" aria-current={isCurrent('/') ? 'page' : undefined}>
+            <AppLink to="/" aria-current={isCurrent('/') ? 'page' : undefined}>
               Home
-            </Link>
-            <Link to="/jobs" aria-current={isCurrent('/jobs') ? 'page' : undefined}>
+            </AppLink>
+            <AppLink to="/jobs" aria-current={isCurrent('/jobs') ? 'page' : undefined}>
               Jobs
-            </Link>
+            </AppLink>
           </nav>
         )}
         <div className="rk-spacer" />

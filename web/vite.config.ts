@@ -1,21 +1,31 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
 // The streaming player needs SharedArrayBuffer, which browsers only expose to
-// cross-origin isolated pages. The Go server sets these on /jobs/*; the dev
-// server sets them everywhere so `bun run dev` behaves the same.
-const isolationHeaders = {
-  'Cross-Origin-Opener-Policy': 'same-origin',
-  'Cross-Origin-Embedder-Policy': 'credentialless',
-};
+// cross-origin isolated pages; the same COOP blocks the Google sign-in popup.
+// The Go server (internal/api/static.go) therefore sets the pair on the job
+// page /jobs/{id} only, and the dev/preview servers mirror that scope.
+const JOB_PAGE = /^\/jobs\/[^/?#]+\/?(?:[?#].*)?$/;
+
+function scopedIsolationHeaders(): Plugin {
+  const apply = (server: { middlewares: { use(fn: (req: { url?: string }, res: { setHeader(k: string, v: string): void }, next: () => void) => void): void } }) => {
+    server.middlewares.use((req, res, next) => {
+      if (JOB_PAGE.test(req.url ?? '')) {
+        res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+        res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+      }
+      next();
+    });
+  };
+  return { name: 'rk-scoped-isolation-headers', configureServer: apply, configurePreviewServer: apply };
+}
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), scopedIsolationHeaders()],
   server: {
     port: 5173,
-    headers: isolationHeaders,
     proxy: {
       '/api': { target: 'http://127.0.0.1:8080', changeOrigin: false },
       '/healthz': { target: 'http://127.0.0.1:8080' },
@@ -24,7 +34,6 @@ export default defineConfig({
   },
   preview: {
     port: 4173,
-    headers: isolationHeaders,
     proxy: {
       '/api': { target: 'http://127.0.0.1:8080', changeOrigin: false },
       '/healthz': { target: 'http://127.0.0.1:8080' },

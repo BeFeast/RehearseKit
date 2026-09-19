@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Link } from '@tanstack/react-router';
 import type { Job } from '../api/types';
+import { AppLink } from './AppLink';
 import { formatRelative, formatTimecode, shortUrl } from '../lib/format';
 import { canCancel, isActive, overallProgress, qualityLabel, rowTone, STAGE_COPY } from '../lib/stages';
 import { Progress, StatusBadge } from './Badge';
@@ -26,9 +26,9 @@ export function JobRow({ job, onCancel, onDelete, onDownload, onCopyLink, busy =
     <article className="rk-jobrow" data-status={rowTone(job.status)} data-testid="job-row">
       <div style={{ minWidth: 0 }}>
         <h3 className="rk-jobrow-title">
-          <Link to="/jobs/$id" params={{ id: job.id }} style={{ color: 'inherit' }}>
+          <AppLink to="/jobs/$id" params={{ id: job.id }} style={{ color: 'inherit' }}>
             {job.project_name}
-          </Link>
+          </AppLink>
         </h3>
         <div className="rk-jobrow-src">
           <Icon name={job.input_type === 'youtube' ? 'youtube' : 'file-audio'} size={14} />
@@ -77,9 +77,9 @@ export function JobRow({ job, onCancel, onDelete, onDownload, onCopyLink, busy =
             Packaging…
           </button>
         ) : (
-          <Link className="rk-btn rk-btn--sm" to="/jobs/$id" params={{ id: job.id }} style={{ color: 'inherit' }}>
+          <AppLink className="rk-btn rk-btn--sm" to="/jobs/$id" params={{ id: job.id }} style={{ color: 'inherit' }}>
             <Icon name="refresh" /> Retry
-          </Link>
+          </AppLink>
         )}
         <KebabMenu job={job} onDelete={onDelete} onDownload={onDownload} onCopyLink={onCopyLink} />
       </div>

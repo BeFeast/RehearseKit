@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useAuth } from '../auth/AuthProvider';
 import { Skeleton } from '../components/Badge';
@@ -6,15 +6,21 @@ import { Skeleton } from '../components/Badge';
 /**
  * Signed-in only. There is no full-page /login (design gap), so an
  * anonymous visitor gets the sign-in dialog over an empty shell and the
- * page renders once a session exists.
+ * page renders once a session exists. The dialog opens once per visit to
+ * the page; dismissing it leaves the shell with an "Open sign in" link
+ * rather than reopening in a loop.
  */
 export function RequireUser({ children, title = 'Sign in to continue', admin = false }: { children: ReactNode; title?: string; admin?: boolean }) {
-  const { user, loading, openSignIn, signInOpen } = useAuth();
+  const { user, loading, openSignIn } = useAuth();
   const navigate = useNavigate();
+  const prompted = useRef(false);
 
   useEffect(() => {
-    if (!loading && !user && !signInOpen) openSignIn();
-  }, [loading, user, signInOpen, openSignIn]);
+    if (!loading && !user && !prompted.current) {
+      prompted.current = true;
+      openSignIn();
+    }
+  }, [loading, user, openSignIn]);
 
   useEffect(() => {
     if (user && user.status === 'pending') void navigate({ to: '/pending-approval' });

@@ -4,6 +4,7 @@ import * as api from '../api';
 import { ApiError } from '../api/client';
 import type { User } from '../api/types';
 import { allClaims, forgetClaim } from '../lib/claim-tokens';
+import { isIsolated, signInHandoffUrl } from '../lib/isolation';
 
 export interface AuthState {
   user: User | null;
@@ -58,6 +59,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [qc]);
 
   const openSignIn = useCallback((next?: () => void) => {
+    if (isIsolated()) {
+      // The job page is cross-origin isolated (COOP same-origin for
+      // SharedArrayBuffer), which also blocks the Google sign-in popup. Hand
+      // off to the list with a full page load; it opens the dialog and comes
+      // back here after sign-in.
+      window.location.assign(signInHandoffUrl(window.location.pathname + window.location.search));
+      return;
+    }
     setAfter(() => next ?? null);
     setSignInOpen(true);
   }, []);
