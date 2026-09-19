@@ -1,4 +1,4 @@
-# RehearseKit rebuild (`rk`) — phases 2–3
+# RehearseKit rebuild (`rk`) — phases 2–4
 
 The rebuild replaces FastAPI + Celery + Redis + the websocket service with
 one Go binary, `rk`, that serves the API, the embedded SPA, the CPU worker
@@ -35,7 +35,7 @@ internal/config/                RK_* environment
 internal/legacy/                import-legacy: FastAPI users/jobs/stems -> rk schema + layout
 tools/tempo/tempo.py            librosa tempo analyser (confidence-gated)
 deploy/gpu-runner/              CUDA image for the runner + vast.ai runbook
-web/                            embedded web/dist (placeholder index.html)
+web/                            the SPA (Vite + React); web/dist is embedded, see "SPA (web/)"
 ```
 
 ## Configuration
@@ -93,7 +93,7 @@ RK_LOCAL_DEMUCS=1 RK_PYTHON=$PWD/.venv/bin/python go run ./cmd/rk worker
 ```
 
 `GET /` answers with the placeholder page until the SPA is built into
-`web/dist` in phase 4.
+`web/dist` (`cd web && bun run build`, then rebuild `rk`; see "SPA (web/)").
 
 ## Pipeline (`rk worker`)
 
@@ -404,3 +404,81 @@ Take a `pg_dump` of the target database before the real run.
 ## Not in this phase
 
 `/jobs/{id}/reprocess`, `/jobs/{id}/mix`, `/profile` and the SPA (phase 4).
+## SPA (`web/`)
+Phase 4: the new front end, a Vite 6 + React 19 + TypeScript SPA that the
+`rk` binary embeds. It renders every screen of the design handoff (landing /
+upload, job history, job detail with the stem mixer, sign-in dialog, pending
+approval, profile, user management, 404 / error boundary), talks only to
+`/api/v1`, and plays stems through the streaming engine ported from the
+`frontend/lib/lab-stream` prototype (SharedArrayBuffer ring buffers + an
+AudioWorklet, HTTP Range chunks, one shared read cursor so stems never drift).
+### Layout
+web/package.json                bun scripts: dev | build | preview | lint | typecheck | test | shots
+web/vite.config.ts              React + Tailwind 4 plugins, COOP/COEP headers, /api proxy, vitest
+web/index.html                  applies the persisted theme before first paint
+web/public/stream-processor.js  the AudioWorklet (plain JS, served at /stream-processor.js)
+web/src/styles/                 tokens.css + screen.css (handoff, verbatim) + app.css (@theme + additions)
+web/src/api/                    typed client (snake_case wire types), SSE subscriber
+web/src/auth/                   session provider, sign-in / register dialog
+web/src/lib/                    decibel law, timecode/bars, .pk parser, stage copy, mix-state reducer
+web/src/player/engine/          streaming engine (+ solo / meters / loop A-B), vitest suite
+web/src/player/use-mixer.ts     engine + mix state + peaks wired into one handle (window.__rk for scripts)
+web/src/components/             header, dialogs, toasts, job row, upload form, mixer strips, mobile player
+web/src/routes/                 one file per route (TanStack Router, code-based tree in src/router.tsx)
+web/scripts/shot.mjs            full-page screenshots of every route through a CDP Chrome
+web/scripts/playback-verify.mjs drives the mixer over CDP and reports underruns / meters / seeks
+web/embed.go                    //go:embed dist, placeholder fallback when the SPA is not built
+web/dist/                       Vite output; only .gitkeep and placeholder.html are tracked
+### Develop
+cd web
+bun install
+bun run dev          # http://127.0.0.1:5173, proxies /api, /healthz, /readyz to rk on :8080
+bun run typecheck    # tsc -b
+bun run lint         # eslint
+bun run test         # vitest (engine, decibel, format, peaks, mix-state, stages, api, RTL)
+The dev server sends `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: credentialless` on every response, which the
+player needs for `SharedArrayBuffer`. `rk serve` sends the same pair on
+`/jobs` and `/jobs/*` (see `internal/api/static.go`).
+### Build and embed
+cd web && bun run build      # clears dist/assets, tsc -b, vite build → web/dist
+cd .. && go build ./cmd/rk   # embeds web/dist
+`web/dist` is gitignored except for `.gitkeep` and `placeholder.html`.
+`web.Dist()` serves `placeholder.html` as `index.html` when no Vite build is
+present, so `go build ./...` and `rk serve` work from a clean checkout; a
+built `index.html` takes precedence. Do not commit `web/dist/index.html` or
+`web/dist/assets/`.
+JetBrains Mono is self-hosted through `@fontsource/jetbrains-mono`
+(woff2 in the bundle); the handoff's Google Fonts `@import` was removed.
+### What degrades until phase 3
+The SPA is written against the full design; routes the API does not have
+yet fall back rather than break:
+| Route | Behaviour now |
+| `POST /auth/google` (501) | Google button shows "coming back soon"; email + password works |
+| `POST /youtube/preview` (404) | URL preview card reads "Preview unavailable — continue anyway" |
+| `GET/PUT /jobs/{id}/mix` (404) | mix state (faders, mute/solo, loop, selected strip) mirrors to `localStorage` |
+| `GET /jobs/{id}/download` (404) | Download button probes with HEAD and explains the package lands with the worker |
+| `GET/PATCH /profile` (404) | profile reads `/auth/me`; saving shows the error banner |
+| reprocess / retry | buttons explain that requeueing lands with the worker |
+| pending approval | the page polls `/auth/me` every 30 s; a pending password account has no session, so it flips to "You're in" only once a session exists |
+### A completed job by hand (`rk peaks`)
+Until the worker exists, a completed job can be assembled for the mixer:
+symlink stem WAVs into `$RK_DATA_DIR/jobs/<id>/stems/{vocals,drums,bass,other}.wav`,
+write the peaks with `rk peaks <id>` (writes `jobs/<id>/peaks/*.pk` using
+`internal/pipeline/peaks`), then insert the `jobs` row (`status =
+'completed'`, `detected_bpm`, `duration_seconds`) and one `stems` row per
+file (`frames`, `sample_rate`, `bit_depth`, `channels`, `peaks_path`).
+### Screenshots and playback verification
+Both scripts talk to a headless Chrome over CDP (the `rk-chrome` container on
+`http://127.0.0.1:19222`, started with `--autoplay-policy=no-user-gesture-required`).
+# every route × {1280, 390} × {light, dark}, signed out and signed in
+node web/scripts/shot.mjs http://127.0.0.1:19222 http://127.0.0.1:8080 /tmp/spa-shots \
+  --login admin@example.com:change-me-please --job <completed-id> --anon-job <anonymous-id> \
+  --processing-job <id> --failed-job <id>
+# 60 s of playback with seek / loop / solo / home, reporting underruns and meters
+node web/scripts/playback-verify.mjs http://127.0.0.1:19222 http://127.0.0.1:8080/jobs/<id> \
+  --duration 60 --seek 120@10 --loop 130,138@20 --solo 2@32 --home@45 --loop-off@50 --json run.json
+Google OIDC (`POST /api/v1/auth/google` answers 501), `rk worker`
+(exits "not implemented"), `/youtube/preview`, `/jobs/{id}/reprocess`,
+`/jobs/{id}/download`, `/jobs/{id}/mix`, `/profile`, the GPU-runner endpoints,
+retention cleanup and `import-legacy`.
