@@ -40,6 +40,10 @@ type run struct {
 	tempo tempo.Result
 	info  wavcheck.Info
 	log   *slog.Logger
+	// handoff makes run stop once the job is in `separating` (intake path).
+	handoff bool
+	// handedOff reports that run stopped at the GPU hand-off.
+	handedOff bool
 }
 
 func (w *Worker) newRun(j *jobs.Job) (*run, error) {
@@ -87,6 +91,9 @@ func (r *run) run(ctx context.Context) error {
 		}
 		if err != nil {
 			return err
+		}
+		if r.handedOff {
+			return nil
 		}
 	}
 	if !started {
@@ -263,18 +270,26 @@ func (r *run) writePeaks(wav, name string) error {
 	return os.Rename(tmp, out)
 }
 
-// separate: hand the job to a GPU runner and wait, or run demucs locally.
+// separate: put the job in `separating`. From there a GPU runner leases it
+// and moves it to finalizing (nothing in this process waits for that), or
+// in local demucs mode the resume loop runs demucs here. The intake path
+// (r.handoff) stops in both modes; the resume path runs demucs locally.
 func (r *run) separate(ctx context.Context) error {
 	p := jobs.StageStart(jobs.StatusSeparating)
 	if r.job.Status != jobs.StatusSeparating {
 		if err := r.w.transition(ctx, r.job.ID, jobs.StatusSeparating, p, jobs.StatusMessage(jobs.StatusSeparating, p)); err != nil {
 			return err
 		}
+		r.job.Status = jobs.StatusSeparating
 	}
-	if r.w.cfg.LocalDemucs {
-		return r.separateLocal(ctx)
+	if r.handoff || !r.w.cfg.LocalDemucs {
+		r.handedOff = true
+		if !r.w.cfg.LocalDemucs {
+			r.log.Info("waiting for a GPU runner", "model", r.model)
+		}
+		return nil
 	}
-	return r.waitForGPU(ctx)
+	return r.separateLocal(ctx)
 }
 
 func (r *run) separateLocal(ctx context.Context) error {
@@ -306,46 +321,6 @@ func (r *run) separateLocal(ctx context.Context) error {
 	}
 	p := jobs.StageStart(jobs.StatusFinalizing)
 	return r.w.transition(ctx, r.job.ID, jobs.StatusFinalizing, p, jobs.StatusMessage(jobs.StatusFinalizing, p))
-}
-
-// waitForGPU polls until a runner completes the lease (job → finalizing).
-// Without any runner taking the job within GPUWaitTimeout the job fails.
-func (r *run) waitForGPU(ctx context.Context) error {
-	r.log.Info("waiting for a GPU runner", "model", r.model)
-	waitingSince := time.Now()
-	t := time.NewTicker(r.w.Poll)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-t.C:
-		}
-		st, err := r.w.store.Status(ctx, r.job.ID)
-		if err != nil {
-			if errors.Is(err, jobs.ErrNotFound) {
-				return errJobEnded
-			}
-			continue
-		}
-		switch st {
-		case jobs.StatusFinalizing:
-			r.job.Status = st
-			return nil
-		case jobs.StatusSeparating:
-			active, err := r.w.gpu.ActiveLease(ctx, r.job.ID)
-			if err == nil && active != nil {
-				waitingSince = time.Now()
-			} else if time.Since(waitingSince) > r.w.cfg.GPUWaitTimeout {
-				return fmt.Errorf("Stem separation failed: no GPU runner picked up the job within %s", r.w.cfg.GPUWaitTimeout)
-			}
-		default:
-			if jobs.IsTerminal(st) {
-				return errJobEnded
-			}
-			return fmt.Errorf("Stem separation failed: unexpected job status %s", st)
-		}
-	}
 }
 
 // finalize: verify stems, peaks, stems rows, project.dawproject.

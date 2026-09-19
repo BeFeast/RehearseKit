@@ -66,6 +66,9 @@ type Config struct {
 	GPUWaitTimeout time.Duration
 	// DemucsDevice is passed to demucs as -d (RK_DEMUCS_DEVICE; default cuda for gpu-agent, cpu for local mode).
 	DemucsDevice string
+	// WorkerSlots is how many jobs the worker drives through the CPU stages
+	// (converting, analyzing) at once (RK_WORKER_SLOTS, default 2).
+	WorkerSlots int
 }
 
 // Defaults returns the configuration used when no RK_* variables are set.
@@ -82,6 +85,7 @@ func Defaults() Config {
 		Python:         "python3",
 		ToolsDir:       "./tools",
 		GPUWaitTimeout: 3 * time.Hour,
+		WorkerSlots:    2,
 	}
 }
 
@@ -132,6 +136,13 @@ func FromEnv() (Config, error) {
 			return cfg, fmt.Errorf("RK_MAX_UPLOAD_BYTES: expected a positive integer, got %q", v)
 		}
 		cfg.MaxUploadBytes = n
+	}
+	if v := os.Getenv("RK_WORKER_SLOTS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return cfg, fmt.Errorf("RK_WORKER_SLOTS: expected a positive integer, got %q", v)
+		}
+		cfg.WorkerSlots = n
 	}
 	if v := os.Getenv("RK_MAX_DURATION_SECONDS"); v != "" {
 		n, err := strconv.Atoi(v)

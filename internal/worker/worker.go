@@ -1,8 +1,25 @@
-// Package worker is `rk worker`: it claims pending jobs and drives them
-// through the CPU stages (converting, analyzing, finalizing, packaging),
-// hands the separating stage to a GPU runner through the lease API (or
-// runs demucs locally in development mode), and runs the housekeeping
-// sweepers (expired leases, stalled jobs, retention).
+// Package worker is `rk worker`. Two loops share one process:
+//
+//   - the intake loop claims pending jobs and drives each through the CPU
+//     stages (converting, analyzing) in its own goroutine, up to Slots at a
+//     time, and lets go of the job the moment it is in `separating`: from
+//     there a GPU runner takes it through the lease API, and nothing in this
+//     process waits on it;
+//   - the resume loop picks up, one at a time, every job that is past the
+//     GPU hand-off and not being processed by anyone (`finalizing` or
+//     `packaging`, whether a runner just completed it or a previous worker
+//     died on it) and runs finalizing → packaging → completed. In local
+//     demucs mode it also takes `separating` jobs without a lease and runs
+//     demucs itself.
+//
+// "Not being processed" is a per-job Postgres advisory lock (jobs.TryLock),
+// so several goroutines or several worker processes never double-run a job.
+// Both loops poll every Poll; a job re-queued by hand (status set back in
+// SQL) is picked up within one interval.
+//
+// The process also runs the housekeeping sweepers: expired GPU leases, the
+// GPU-wait watchdog (a job nobody leases within GPUWaitTimeout fails),
+// stalled CPU-stage jobs and retention.
 package worker
 
 import (
@@ -11,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,6 +47,24 @@ const (
 	RetentionSweepInterval = 10 * time.Minute
 )
 
+// resumeBatch bounds how many resumable candidates one poll tries to lock.
+const resumeBatch = 16
+
+// lockHeadroom is how many pool connections must stay free for the
+// ordinary queries (transitions, cancel watchers, sweepers) while every
+// slot and the resume loop each hold a lock connection.
+const lockHeadroom = 4
+
+// PoolConns is the pool size a worker with slots CPU pipelines needs: one
+// reserved lock connection per slot, one for the resume loop, plus
+// headroom. cmd/rk sizes the pool with it; New warns on a smaller pool.
+func PoolConns(slots int) int32 {
+	if slots < 1 {
+		slots = 1
+	}
+	return int32(slots) + 1 + lockHeadroom
+}
+
 // Worker processes jobs.
 type Worker struct {
 	cfg    config.Config
@@ -39,30 +75,123 @@ type Worker struct {
 
 	// Poll is the queue polling and cancellation check interval.
 	Poll time.Duration
-	// Adopt makes Run pick up jobs left in separating/finalizing/packaging
-	// by a previous worker process (single-worker deployments).
-	Adopt bool
+	// Slots is how many jobs run the CPU stages concurrently (default
+	// cfg.WorkerSlots, RK_WORKER_SLOTS).
+	Slots int
+
+	// waiting is when each job in `separating` was last seen without an
+	// active lease; the GPU-wait watchdog fails a job after GPUWaitTimeout.
+	mu      sync.Mutex
+	waiting map[string]time.Time
 }
 
 // New builds a worker.
 func New(cfg config.Config, pool *pgxpool.Pool, layout storage.Layout) *Worker {
+	slots := cfg.WorkerSlots
+	if slots < 1 {
+		slots = 1
+	}
+	if want, have := PoolConns(slots), pool.Config().MaxConns; have < want {
+		slog.Warn("worker: database pool is small for the slot count; job locks each hold a connection",
+			"pool_max_conns", have, "recommended", want, "slots", slots)
+	}
 	return &Worker{
 		cfg: cfg, pool: pool, store: jobs.NewStore(pool), gpu: gpu.NewStore(pool, cfg.LeaseTTL), layout: layout,
-		Poll: 2 * time.Second, Adopt: true,
+		Poll: 2 * time.Second, Slots: slots, waiting: map[string]time.Time{},
 	}
 }
 
-// Run claims and processes jobs until ctx is cancelled.
+// Run drives the intake and resume loops and the sweepers until ctx is
+// cancelled, then waits for the jobs in flight to stop.
 func (w *Worker) Run(ctx context.Context) error {
-	slog.Info("rk worker", "data_dir", w.layout.Root, "local_demucs", w.cfg.LocalDemucs, "max_duration", w.cfg.MaxDuration)
-	go w.sweep(ctx)
-	if w.Adopt {
-		w.adopt(ctx)
-	}
+	slog.Info("rk worker", "data_dir", w.layout.Root, "slots", w.Slots, "local_demucs", w.cfg.LocalDemucs, "max_duration", w.cfg.MaxDuration)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); w.sweep(ctx) }()
+	go func() { defer wg.Done(); w.resumeLoop(ctx) }()
+	w.intakeLoop(ctx, &wg)
+	wg.Wait()
+	return nil
+}
+
+// intakeLoop claims pending jobs into free slots.
+func (w *Worker) intakeLoop(ctx context.Context, wg *sync.WaitGroup) {
+	slots := make(chan struct{}, w.Slots)
 	for ctx.Err() == nil {
-		ran, err := w.RunOnce(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case slots <- struct{}{}:
+		}
+		j, err := jobs.Claim(ctx, w.pool)
+		if err != nil {
+			<-slots
+			if !errors.Is(err, jobs.ErrNoJobs) && ctx.Err() == nil {
+				slog.Error("worker: claim", "err", err)
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(w.Poll):
+			}
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+			w.intake(ctx, j)
+		}()
+	}
+}
+
+// RunOnce claims one pending job and runs its CPU stages up to the GPU
+// hand-off (or, with local demucs, up to `separating` as well; the resume
+// loop runs demucs). Returns false when the queue is empty.
+func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
+	j, err := jobs.Claim(ctx, w.pool)
+	if errors.Is(err, jobs.ErrNoJobs) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	w.intake(ctx, j)
+	return true, nil
+}
+
+// intake runs a freshly claimed job under its lock up to `separating`.
+func (w *Worker) intake(ctx context.Context, j *jobs.Job) {
+	unlock, ok, err := w.store.TryLock(ctx, j.ID)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Error("worker: lock", "job", j.ID, "err", err)
+		}
+		return
+	}
+	if !ok {
+		// Claim moved it out of pending, so no worker should hold it; never
+		// run without the lock, give it back to the queue instead.
+		slog.Warn("worker: claimed job is locked elsewhere; re-queued", "job", j.ID)
+		if err := jobs.Transition(ctx, w.pool, j.ID, jobs.StatusPending, 0, jobs.StatusMessage(jobs.StatusPending, 0)); err != nil && ctx.Err() == nil {
+			slog.Error("worker: re-queue", "job", j.ID, "err", err)
+		}
+		return
+	}
+	defer unlock()
+	w.process(ctx, j, true)
+}
+
+// resumeLoop runs ResumeOnce and the GPU-wait watchdog every Poll.
+func (w *Worker) resumeLoop(ctx context.Context) {
+	for ctx.Err() == nil {
+		if ids, err := w.SweepGPUWait(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("worker: gpu wait", "err", err)
+		} else if len(ids) > 0 {
+			slog.Warn("worker: no GPU runner took these jobs in time; failed", "jobs", ids)
+		}
+		ran, err := w.ResumeOnce(ctx)
 		if err != nil && ctx.Err() == nil {
-			slog.Error("worker: claim", "err", err)
+			slog.Error("worker: resume", "err", err)
 		}
 		if ran {
 			continue
@@ -72,51 +201,111 @@ func (w *Worker) Run(ctx context.Context) error {
 		case <-time.After(w.Poll):
 		}
 	}
-	return nil
 }
 
-// RunOnce claims one pending job and processes it. Returns false when the
-// queue is empty.
-func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
-	j, err := jobs.Claim(ctx, w.pool)
-	if errors.Is(err, jobs.ErrNoJobs) {
-		return false, nil
-	}
+// ResumeOnce locks and runs to completion the oldest job past the GPU
+// hand-off that nobody is processing (`finalizing`, `packaging`; with local
+// demucs also lease-less `separating`). Returns false when there is none.
+func (w *Worker) ResumeOnce(ctx context.Context) (bool, error) {
+	ids, err := w.store.Resumable(ctx, w.cfg.LocalDemucs, resumeBatch)
 	if err != nil {
 		return false, err
 	}
-	w.Process(ctx, j)
-	return true, nil
-}
-
-// adopt resumes jobs a previous worker left mid-pipeline.
-func (w *Worker) adopt(ctx context.Context) {
-	rows, err := w.pool.Query(ctx, `SELECT id FROM jobs WHERE status IN ('separating', 'finalizing', 'packaging') ORDER BY created_at`)
-	if err != nil {
-		slog.Error("worker: adopt", "err", err)
-		return
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err == nil {
-			ids = append(ids, id)
-		}
-	}
-	rows.Close()
 	for _, id := range ids {
-		j, err := w.store.Get(ctx, id)
+		unlock, ok, err := w.store.TryLock(ctx, id)
 		if err != nil {
+			return false, err
+		}
+		if !ok {
 			continue
 		}
-		slog.Info("worker: adopting job", "job", id, "status", j.Status)
-		w.Process(ctx, j)
+		ran := func() bool {
+			defer unlock()
+			// Re-read under the lock: the previous holder may just have
+			// finished it.
+			j, err := w.store.Get(ctx, id)
+			if err != nil {
+				return false
+			}
+			if j.Status != jobs.StatusFinalizing && j.Status != jobs.StatusPackaging &&
+				!(w.cfg.LocalDemucs && j.Status == jobs.StatusSeparating) {
+				return false
+			}
+			slog.Info("worker: resuming job", "job", id, "status", j.Status)
+			w.process(ctx, j, false)
+			return true
+		}()
+		if ran {
+			return true, nil
+		}
 	}
+	return false, nil
 }
 
-// Process runs the pipeline for j from its current status onward. It
-// returns when the job is terminal (or the worker is shutting down).
+// SweepGPUWait fails jobs that sat in `separating` without any runner
+// leasing them for GPUWaitTimeout, counted from when this process first
+// saw them unleased (a lease, even a failed one, restarts the clock).
+// Returns the ids it failed. No-op in local demucs mode.
+func (w *Worker) SweepGPUWait(ctx context.Context) ([]string, error) {
+	if w.cfg.LocalDemucs {
+		return nil, nil
+	}
+	list, err := w.gpu.WaitingJobs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	var expired []string
+	w.mu.Lock()
+	seen := make(map[string]bool, len(list))
+	for _, wj := range list {
+		seen[wj.JobID] = true
+		if wj.Leased {
+			delete(w.waiting, wj.JobID)
+			continue
+		}
+		since, ok := w.waiting[wj.JobID]
+		if !ok {
+			w.waiting[wj.JobID] = now
+			continue
+		}
+		if now.Sub(since) > w.cfg.GPUWaitTimeout {
+			expired = append(expired, wj.JobID)
+		}
+	}
+	for id := range w.waiting {
+		if !seen[id] {
+			delete(w.waiting, id)
+		}
+	}
+	w.mu.Unlock()
+	var failed []string
+	for _, id := range expired {
+		msg := fmt.Sprintf("Stem separation failed: no GPU runner picked up the job within %s", w.cfg.GPUWaitTimeout)
+		err := jobs.Transition(ctx, w.pool, id, jobs.StatusFailed, 0, msg)
+		if err != nil && !errors.Is(err, jobs.ErrTerminal) && !errors.Is(err, jobs.ErrNotFound) {
+			return failed, err
+		}
+		w.mu.Lock()
+		delete(w.waiting, id)
+		w.mu.Unlock()
+		failed = append(failed, id)
+	}
+	return failed, nil
+}
+
+// Process runs the pipeline for j from its current status to a terminal
+// status (or until the worker shuts down). In GPU mode a job that reaches
+// `separating` this way is still handed off, since only a runner can
+// separate it. Process does not take the job lock; Run's loops do.
 func (w *Worker) Process(ctx context.Context, j *jobs.Job) {
+	w.process(ctx, j, false)
+}
+
+// process runs the stages from j's current status. With handoff set the run
+// stops as soon as the job is in `separating` (the intake path); otherwise
+// it continues to a terminal status (the resume path).
+func (w *Worker) process(ctx context.Context, j *jobs.Job, handoff bool) {
 	log := slog.With("job", j.ID, "quality", j.Quality)
 	jctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -127,9 +316,12 @@ func (w *Worker) Process(ctx context.Context, j *jobs.Job) {
 		w.fail(ctx, j.ID, "Processing failed: "+err.Error())
 		return
 	}
+	r.handoff = handoff
 	start := time.Now()
 	err = r.run(jctx)
 	switch {
+	case err == nil && r.handedOff:
+		log.Info("job handed to the GPU queue", "took", time.Since(start).Round(time.Second))
 	case err == nil:
 		log.Info("job completed", "took", time.Since(start).Round(time.Second))
 	case errors.Is(err, errJobEnded):
