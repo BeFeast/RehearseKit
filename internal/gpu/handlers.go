@@ -57,6 +57,7 @@ func (h *Handlers) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/gpu/lease/{id}/heartbeat", h.auth(h.heartbeat))
 	mux.Handle("POST /api/v1/gpu/lease/{id}/complete", h.auth(h.complete))
 	mux.Handle("POST /api/v1/gpu/lease/{id}/fail", h.auth(h.fail))
+	mux.Handle("GET /api/v1/gpu/queue", h.auth(h.queue))
 }
 
 func (h *Handlers) auth(next http.HandlerFunc) http.Handler {
@@ -153,6 +154,18 @@ func (h *Handlers) lease(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("gpu lease", "lease", l.ID, "job", j.ID, "runner", rid, "model", model)
 	respond.JSON(w, http.StatusOK, resp)
+}
+
+// queue answers GET /gpu/queue for autoscalers: {waiting, active_leases,
+// oldest_waiting_at}. Runner token required, like the lease calls.
+func (h *Handlers) queue(w http.ResponseWriter, r *http.Request) {
+	st, err := h.store.QueueStats(r.Context())
+	if err != nil {
+		respond.Fail(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	respond.JSON(w, http.StatusOK, st)
 }
 
 // heartbeatSeconds is the interval runners are told to heartbeat at: a

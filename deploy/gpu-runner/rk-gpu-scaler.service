@@ -1,0 +1,32 @@
+# systemd user unit for the on-demand GPU runner launcher.
+#
+#   install -Dm644 deploy/gpu-runner/rk-gpu-scaler.service ~/.config/systemd/user/
+#   install -Dm600 scripts/gpu/scaler.env.example ~/.config/rk/scaler.env   # then edit
+#   loginctl enable-linger "$USER"      # keep user services running without a login session
+#   systemctl --user daemon-reload && systemctl --user enable --now rk-gpu-scaler
+#   journalctl --user -u rk-gpu-scaler -f
+#
+# The host needs: rk in ~/.local/bin, the vastai CLI (authenticated, in
+# ~/.local/bin), ssh with a key registered on the vast.ai account, and a
+# docker config.json with a login for the runner image's registry.
+
+[Unit]
+Description=RehearseKit GPU autoscaler (vast.ai on-demand runner)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/rk/scaler.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/rk gpu-scaler
+Restart=always
+RestartSec=10
+# Leave the instance running on stop: the next start reattaches through the
+# state file (~/.local/state/rk-gpu-scaler/state.json) and applies the idle
+# policy; only the ssh tunnel is closed.
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

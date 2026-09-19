@@ -61,6 +61,37 @@ ssh -N -R 18080:127.0.0.1:18080 -p <PORT> root@<sshN.vast.ai>
 # on the instance: RK_API_URL=http://127.0.0.1:18080
 ```
 
+## Automatic: `rk gpu-scaler`
+
+The manual flow above is what `rk gpu-scaler` does on its own, on a host
+with outbound internet, `vastai` and ssh (not on the server): it polls
+`GET /api/v1/gpu/queue`, rents the cheapest matching offer when a job
+waits, opens the reverse ssh tunnel into the instance, starts the agent
+through the on-start script, and destroys the instance after 10 minutes
+with nothing waiting and no active lease (also at 6 h of age, or when the
+box never starts). One instance at most; it never rents below $5 of
+credit and only ever destroys instances carrying its own label.
+
+```bash
+# on the vast.ai-facing host
+go build -o ~/.local/bin/rk ./cmd/rk
+install -Dm600 scripts/gpu/scaler.env.example ~/.config/rk/scaler.env   # RK_API_URL, RK_RUNNER_TOKEN, …
+install -Dm644 deploy/gpu-runner/rk-gpu-scaler.service ~/.config/systemd/user/
+loginctl enable-linger "$USER"
+systemctl --user daemon-reload && systemctl --user enable --now rk-gpu-scaler
+journalctl --user -u rk-gpu-scaler -f     # rent → running → tunnel verified → first lease → destroyed
+rk-gpu-scaler status                      # state file: instance, timestamps, cost history
+```
+
+What it passes to `vastai create instance`: `--image $RK_SCALER_IMAGE
+--login <from ~/.docker/config.json> --ssh --direct --disk 30 --label
+rk-gpu-scaler --cancel-unavail`, `--env '-e RK_API_URL=http://127.0.0.1:18080
+-e RK_RUNNER_TOKEN=…'` and an `--onstart-cmd` that waits for `/healthz`
+through the tunnel and then runs `rk gpu-agent` (log:
+`/var/log/rk-gpu-agent.log` on the instance). Policy and variables:
+[`docs/rebuild/README.md`](../../docs/rebuild/README.md#gpu-autoscaler-rk-gpu-scaler),
+`scripts/gpu/scaler.env.example`.
+
 ## Runtime notes
 
 * Demucs writes 24-bit FLAC (`--flac --int24`) at 44.1 kHz; ffmpeg then
@@ -79,3 +110,6 @@ ssh -N -R 18080:127.0.0.1:18080 -p <PORT> root@<sshN.vast.ai>
   without a heartbeat; the agent heartbeats every `TTL/4`. If the server
   answers 409/410 the job was cancelled and demucs is killed.
 * Three failed or expired leases fail the job.
+* `GET /api/v1/gpu/queue` (runner token) answers `{"waiting": N,
+  "active_leases": M, "oldest_waiting_at": …}` for autoscalers; `waiting`
+  is what the next lease call would be offered.

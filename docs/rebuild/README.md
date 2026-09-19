@@ -10,7 +10,7 @@ to run it on a laptop. The legacy `backend/`, `frontend/`, `websocket/` and
 
 ```
 go.mod                          module github.com/BeFeast/RehearseKit (Go 1.26)
-cmd/rk/main.go                  serve | migrate | create-admin | import-legacy | worker | gpu-agent
+cmd/rk/main.go                  serve | migrate | create-admin | import-legacy | worker | gpu-agent | gpu-scaler
 internal/api/                   server wiring, middleware, error envelope, SPA
 internal/api/respond/           JSON + {"code","message"} helpers
 internal/auth/                  argon2id passwords, cookie sessions, approval, admin, Google sign-in
@@ -21,9 +21,10 @@ internal/stems/                 Range-served WAV + peaks (from stemd)
 internal/storage/               on-disk layout under RK_DATA_DIR
 internal/db/                    pgx pool, embedded migrations, dbtest helper
 internal/signed/                HMAC signed URLs; GET source / PUT stem endpoints
-internal/gpu/                   GPU lease API (claim, heartbeat, complete, fail, expiry)
+internal/gpu/                   GPU lease API (claim, heartbeat, complete, fail, expiry, queue stats)
 internal/worker/                rk worker: CPU stages, GPU wait, sweepers
 internal/agent/                 rk gpu-agent: lease → demucs → upload loop
+internal/scaler/                rk gpu-scaler: vast.ai rent/destroy policy, ssh reverse tunnel, state file
 internal/pipeline/peaks/        .pk writer/reader (min/max mip pyramid)
 internal/pipeline/media/        ffprobe / ffmpeg / yt-dlp wrappers (ctx-killed)
 internal/pipeline/tempo/        tempo.json model + runner for tools/tempo/tempo.py
@@ -62,6 +63,7 @@ web/                            the SPA (Vite + React); web/dist is embedded, se
 | `RK_LOCAL_DEMUCS` | unset | `1` makes the worker run `python -m demucs` itself (dev; no GPU runner needed) |
 | `RK_DEMUCS_DEVICE` | `cpu` (worker) / `cuda` (agent) | demucs `-d` |
 | `RK_GPU_WAIT_TIMEOUT` | `3h` | a job waiting in `separating` with no runner ever leasing it fails after this |
+| `RK_SCALER_*` | see [GPU autoscaler](#gpu-autoscaler-rk-gpu-scaler) | `rk gpu-scaler` policy, image, tunnel and state (runs on the vast.ai-facing host, not the server) |
 
 ## Run locally
 
@@ -158,6 +160,7 @@ runner                                   rk serve
   PUT  upload_urls[stem] (Content-Length ≤ 2 GiB) ─▶ jobs/<id>/stems/<stem>.wav (temp + rename)
   POST /gpu/lease/{id}/complete {stems:[{name,bytes,sha256}]} ─▶ verify size/sha/WAV header → job finalizing
   POST /gpu/lease/{id}/fail {error} ────▶ lease failed; job re-offered, or failed after 3 attempts
+  GET  /api/v1/gpu/queue ───────────────▶ {waiting, active_leases, oldest_waiting_at} (autoscalers)
 ```
 
 All `/api/v1/gpu/*` calls carry `Authorization: Bearer $RK_RUNNER_TOKEN`
@@ -178,6 +181,74 @@ to waiting; three failed/expired leases fail the job.
 
 Image, flags and the vast.ai rent → run → destroy flow:
 [`deploy/gpu-runner/README.md`](../../deploy/gpu-runner/README.md).
+
+## GPU autoscaler (`rk gpu-scaler`)
+
+On-demand launcher for one vast.ai runner. Runs on a host with outbound
+internet, the `vastai` CLI and ssh (on the home network: maestro), not on
+the server. Every `RK_SCALER_INTERVAL` (30 s) it observes the queue, vast's
+instance list and — when about to rent — the account credit, then applies
+a pure policy (`internal/scaler.Decide`, table-tested):
+
+| Situation | Action |
+|---|---|
+| no instance, `waiting > 0`, credit ≥ `RK_SCALER_MIN_CREDIT` ($5) | rent the cheapest offer matching `RK_SCALER_OFFER_QUERY` (preferring hosts with direct ports) |
+| instance up, `waiting == 0 && active_leases == 0` for `RK_SCALER_IDLE` (10 m) | destroy |
+| instance older than `RK_SCALER_MAX_AGE` (6 h) | destroy (re-rented next tick if jobs still wait) |
+| instance not `running` after `RK_SCALER_BOOT_TIMEOUT` (15 m) | destroy |
+| vast no longer lists our instance | forget it; re-rent if needed |
+| rent failed | back off `RK_SCALER_RENT_COOLDOWN` (2 m) |
+| queue unreadable | keep the instance, rent nothing |
+
+Hard caps: at most one instance; only instances carrying our label
+(`RK_SCALER_LABEL`, default `rk-gpu-scaler`) are ever destroyed; other
+instances on the account are never touched.
+
+The queue comes from `GET /api/v1/gpu/queue` (runner token) →
+`{"waiting": N, "active_leases": M, "oldest_waiting_at": …}`: `waiting` is
+exactly what the next `POST /gpu/lease` would be offered (jobs in
+`separating` with no active lease and fewer than 3 failed/expired leases).
+When the server predates that endpoint (404) and `RK_DATABASE_URL` is set,
+the scaler reads the same numbers from Postgres until the server is
+upgraded (read-only queries).
+
+Reaching a LAN-only server: `rk serve` behind a LAN proxy is not reachable
+from the rented box, and Cloudflare caps request bodies at 100 MB (stems
+are larger), so the scaler opens a reverse ssh tunnel *from* its host
+*into* the instance — `ssh -N -R 127.0.0.1:18080:<RK_API_URL host>` — and
+the runner is started with `RK_API_URL=http://127.0.0.1:18080`. The
+on-start script waits for `/healthz` through the tunnel before running
+`rk gpu-agent`. The tunnel is a supervised ssh process (direct address
+first, vast's ssh proxy as fallback, backoff on failure, `accept-new`
+host-key pinning in the state dir) and is verified by curling `/healthz`
+from inside the instance. Set `RK_SCALER_NO_TUNNEL=1` when the API is
+public.
+
+State: `~/.local/state/rk-gpu-scaler/state.json` — current instance (id,
+offer, rented/running/tunnel/first-lease timestamps), idle timer, rent
+failure, and a history of destroyed instances with the reason and the
+estimated cost. A restart reattaches to the instance in the state; a
+labelled instance that is not in the state is adopted (lost state file)
+when it is the only one, otherwise destroyed as an orphan.
+
+Install (systemd user unit, logs to journald):
+
+```bash
+go build -o ~/.local/bin/rk ./cmd/rk
+install -Dm600 scripts/gpu/scaler.env.example ~/.config/rk/scaler.env   # edit: RK_API_URL, RK_RUNNER_TOKEN, …
+install -Dm644 deploy/gpu-runner/rk-gpu-scaler.service ~/.config/systemd/user/
+loginctl enable-linger "$USER"
+systemctl --user daemon-reload && systemctl --user enable --now rk-gpu-scaler
+journalctl --user -u rk-gpu-scaler -f
+rk-gpu-scaler status          # scripts/gpu/rk-gpu-scaler: prints the state file
+rk gpu-scaler --once          # one tick, then exit
+```
+
+The registry login for the private runner image is taken from
+`~/.docker/config.json` (inline auth for the image's registry) unless
+`RK_SCALER_DOCKER_LOGIN` is set; the vast.ai key from the CLI's own key
+file unless `VAST_API_KEY`/`VAST_API_KEY_FILE` is set. All variables:
+`scripts/gpu/scaler.env.example`, `rk gpu-scaler -h`.
 
 ## curl tour
 
