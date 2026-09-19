@@ -141,10 +141,7 @@ func (h *Handlers) lease(w http.ResponseWriter, r *http.Request) {
 	resp := LeaseResponse{
 		LeaseID: l.ID, JobID: j.ID, Model: model, Stems: stems,
 		SourceURL: base + src, UploadURLs: map[string]string{}, ExpiresAt: l.ExpiresAt,
-		HeartbeatSeconds: int(h.store.TTL.Seconds() / 4),
-	}
-	if resp.HeartbeatSeconds < 5 {
-		resp.HeartbeatSeconds = 5
+		HeartbeatSeconds: heartbeatSeconds(h.store.TTL),
 	}
 	for _, name := range stems {
 		u, err := h.signer.Sign(http.MethodPut, signed.StemPath(j.ID, name), exp)
@@ -156,6 +153,20 @@ func (h *Handlers) lease(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("gpu lease", "lease", l.ID, "job", j.ID, "runner", rid, "model", model)
 	respond.JSON(w, http.StatusOK, resp)
+}
+
+// heartbeatSeconds is the interval runners are told to heartbeat at: a
+// quarter of the TTL for liveness, but never more than 15 s so progress
+// reaches the UI at a useful rate, and never less than 5 s.
+func heartbeatSeconds(ttl time.Duration) int {
+	s := int(ttl.Seconds() / 4)
+	if s > 15 {
+		s = 15
+	}
+	if s < 5 {
+		s = 5
+	}
+	return s
 }
 
 func (h *Handlers) leaseErr(w http.ResponseWriter, err error) {

@@ -145,6 +145,7 @@ func (h *Handlers) putStem(w http.ResponseWriter, r *http.Request) {
 		respond.Failf(w, http.StatusBadRequest, "short_body", "body shorter than Content-Length")
 		return
 	}
+	_ = os.Chmod(tmpName, 0o644) // CreateTemp defaults to 0600
 	if err := os.Rename(tmpName, path); err != nil {
 		cleanup()
 		respond.Fail(w, err)

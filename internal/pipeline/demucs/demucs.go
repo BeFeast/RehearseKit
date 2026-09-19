@@ -47,13 +47,21 @@ var (
 )
 
 // Tracker folds successive per-model progress bars into one 0..1 value.
+//
+// Only separation bars count: demucs prints "Separating track <name>"
+// before them, and they run in "seconds" units (tqdm unit="seconds"). A
+// model download that happens first also shows a tqdm bar (in MB); it is
+// ignored, otherwise progress would hit 100 % before separation begins.
 type Tracker struct {
 	mu       sync.Mutex
 	bars     int
 	done     int
 	last     float64 // last percentage seen on the current bar
 	progress float64
+	armed    bool // seen "Separating track"
 }
+
+var separatingRe = regexp.MustCompile(`(?i)^Separating track`)
 
 // NewTracker returns a tracker expecting bars progress bars.
 func NewTracker(bars int) *Tracker {
@@ -72,9 +80,16 @@ func (t *Tracker) Feed(line string) {
 			t.bars = n
 		}
 	}
+	if separatingRe.MatchString(strings.TrimSpace(line)) {
+		t.armed = true
+		return
+	}
 	m := pctRe.FindStringSubmatch(line)
 	if m == nil {
 		return
+	}
+	if !t.armed && !strings.Contains(line, "seconds") {
+		return // a download bar or something else before separation
 	}
 	pct, _ := strconv.ParseFloat(m[1], 64)
 	if pct < t.last-1 { // a new bar started (e.g. 100 → 3)

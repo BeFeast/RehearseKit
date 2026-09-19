@@ -25,8 +25,34 @@ func TestTrackerSingleBar(t *testing.T) {
 	}
 }
 
+func TestTrackerIgnoresDownloadBar(t *testing.T) {
+	tr := NewTracker(1)
+	for _, l := range []string{
+		`Downloading: "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th" to /root/.cache/torch/hub/checkpoints/5c90dfd2-34c22ccb.th`,
+		" 45%|████▌     | 36.1M/80.2M [00:00<00:00, 60.3MB/s]",
+		"100%|██████████| 80.2M/80.2M [00:01<00:00, 62.0MB/s]",
+	} {
+		tr.Feed(l)
+	}
+	if p := tr.Progress(); p != 0 {
+		t.Fatalf("download bar counted as progress: %v", p)
+	}
+	tr.Feed("Separating track source.wav")
+	tr.Feed(" 50%|█████     | 315.0/630.0 [00:07<00:07, 44.9seconds/s]")
+	if p := tr.Progress(); p != 0.5 {
+		t.Fatalf("after separation bar: %v", p)
+	}
+	// Without the banner, a bar in seconds still counts.
+	tr2 := NewTracker(1)
+	tr2.Feed(" 20%|██        | 126.0/630.0 [00:03<00:12, 41.0seconds/s]")
+	if p := tr2.Progress(); p != 0.2 {
+		t.Fatalf("seconds bar without banner: %v", p)
+	}
+}
+
 func TestTrackerBagOfModels(t *testing.T) {
 	tr := NewTracker(Bars["htdemucs_ft"])
+	tr.Feed("Separating track x.wav")
 	feed := func(pcts ...int) {
 		for _, p := range pcts {
 			tr.Feed(strings.Repeat(" ", 3) + itoa(p) + "%|xx| 1/2")
@@ -54,6 +80,7 @@ func TestTrackerBagOfModels(t *testing.T) {
 func TestTrackerLearnsBagSize(t *testing.T) {
 	tr := NewTracker(1)
 	tr.Feed("Selected model is a bag of 4 models. You will see that many progress bars per track.")
+	tr.Feed("Separating track x.wav")
 	tr.Feed("100%|x| 1/1")
 	if p := tr.Progress(); p != 0.25 {
 		t.Fatalf("progress %v", p)

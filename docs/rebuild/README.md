@@ -210,9 +210,12 @@ curl -s -b cj -X DELETE $B/api/v1/jobs/<id>
 # progress as Server-Sent Events (replays after Last-Event-ID, ends on a terminal status)
 curl -N -b cj -H 'Last-Event-ID: 0' $B/api/v1/jobs/<id>/events
 
-# stems and peaks with Range (written by the worker in phase 3)
+# stems and peaks with Range (written by the worker)
 curl -b cj -H 'Range: bytes=0-65535' -o part.wav -D - $B/api/v1/jobs/<id>/stems/vocals
 curl -b cj -o vocals.pk $B/api/v1/jobs/<id>/stems/vocals/peaks
+
+# the package (409 not_ready until the job is completed; Range supported)
+curl -b cj -OJ $B/api/v1/jobs/<id>/download
 
 # admin approval of self-registered accounts
 curl -s -b cj '$B/api/v1/admin/users?status=pending'

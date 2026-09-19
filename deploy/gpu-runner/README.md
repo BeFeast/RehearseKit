@@ -65,8 +65,16 @@ ssh -N -R 18080:127.0.0.1:18080 -p <PORT> root@<sshN.vast.ai>
 
 * Demucs writes 24-bit FLAC (`--flac --int24`) at 44.1 kHz; ffmpeg then
   resamples to 24-bit/48 kHz stereo WAV, which is what the server verifies.
-* Progress comes from the tqdm bars on stderr; `htdemucs_ft` is a bag of
-  four models and shows four bars, which the agent folds into one 0..1 value.
+* Progress comes from the tqdm bars on stderr after the `Separating track`
+  line; `htdemucs_ft` is a bag of four models and shows four bars, which the
+  agent folds into one 0..1 value. A model-download bar (only on images
+  without pre-downloaded models) is ignored.
+* Runner-side timings on an RTX 3060 (vast.ai, Sept 2026): 629 s of audio
+  through `htdemucs_6s` in 29 s of demucs wall time; the whole lease
+  (download 181 MB source, separate, convert, upload six 181 MB stems
+  through an ssh tunnel) took 97 s. A 3-minute track through
+  `htdemucs_ft` took 45 s lease-to-complete; 1 minute through `htdemucs`
+  11 s.
 * A lease expires after `RK_GPU_LEASE_TTL` (server side, default 10 min)
   without a heartbeat; the agent heartbeats every `TTL/4`. If the server
   answers 409/410 the job was cancelled and demucs is killed.

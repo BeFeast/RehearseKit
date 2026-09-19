@@ -258,13 +258,22 @@ func (a *Agent) process(ctx context.Context, lease gpu.LeaseResponse, log *slog.
 	progress.Store(50) // 5 %
 
 	// 2. Separate.
+	sepStart := time.Now()
+	lastLogged := -1
 	out, err := demucs.Run(wctx, demucs.Options{
 		Python: a.cfg.Python, Model: lease.Model, Device: a.cfg.Device, Input: src,
 		OutDir: filepath.Join(work, "out"), Extra: a.cfg.DemucsExtra,
-	}, func(p float64) { progress.Store(int64((0.05 + 0.85*p) * 1000)) })
+	}, func(p float64) {
+		progress.Store(int64((0.05 + 0.85*p) * 1000))
+		if step := int(p * 10); step > lastLogged {
+			lastLogged = step
+			log.Info("demucs progress", "pct", step*10, "elapsed", time.Since(sepStart).Round(time.Second))
+		}
+	})
 	if err != nil {
 		return wrap(err)
 	}
+	log.Info("demucs finished", "took", time.Since(sepStart).Round(time.Second))
 	progress.Store(900)
 
 	// 3. FLAC → 24-bit/48 kHz WAV.
