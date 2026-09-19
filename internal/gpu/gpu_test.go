@@ -287,6 +287,32 @@ func TestExpiryReleasesJob(t *testing.T) {
 	if jj.ID != j.ID || l2.ID == l1.ID {
 		t.Fatalf("re-lease %v %v", l2, jj)
 	}
+	// The expired lease's late Fail/Complete are rejected and not counted
+	// a second time toward the failure limit.
+	if _, err := e.store.Fail(ctx, l1.ID, "r1", "late"); !errors.Is(err, gpu.ErrNotActive) {
+		t.Fatalf("late fail: %v", err)
+	}
+	if err := e.store.Complete(ctx, l1.ID, "r1", nil, nil); !errors.Is(err, gpu.ErrNotActive) {
+		t.Fatalf("late complete: %v", err)
+	}
+	if n, _ := e.store.Failures(ctx, j.ID); n != 1 {
+		t.Fatalf("failures counted %d, want 1", n)
+	}
+	// Expiry racing a Fail: once the sweeper closed the lease, Fail must
+	// not run the failure policy again.
+	time.Sleep(80 * time.Millisecond)
+	if _, err := e.store.ExpireStale(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.Fail(ctx, l2.ID, "r2", "boom"); !errors.Is(err, gpu.ErrNotActive) {
+		t.Fatalf("fail after expiry: %v", err)
+	}
+	if n, _ := e.store.Failures(ctx, j.ID); n != 2 {
+		t.Fatalf("failures counted %d, want 2", n)
+	}
+	if got := e.status(j.ID); got != jobs.StatusSeparating {
+		t.Fatalf("status %s", got)
+	}
 }
 
 func TestCancelledJobClosesLease(t *testing.T) {

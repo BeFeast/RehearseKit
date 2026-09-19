@@ -197,7 +197,7 @@ func (s *Store) Heartbeat(ctx context.Context, leaseID, runnerID string, progres
 		return nil, err
 	}
 	if status != jobs.StatusSeparating {
-		_, _ = s.pool.Exec(ctx, `UPDATE gpu_leases SET state = 'failed' WHERE id = $1 AND state = 'active'`, leaseID)
+		_ = s.close(ctx, leaseID, StateFailed)
 		return nil, ErrJobGone
 	}
 	p := jobs.StageProgress(jobs.StatusSeparating, progress)
@@ -228,7 +228,7 @@ func (s *Store) Complete(ctx context.Context, leaseID, runnerID string, reported
 		return err
 	}
 	if j.Status != jobs.StatusSeparating {
-		_, _ = s.pool.Exec(ctx, `UPDATE gpu_leases SET state = 'failed' WHERE id = $1 AND state = 'active'`, leaseID)
+		_ = s.close(ctx, leaseID, StateFailed)
 		return ErrJobGone
 	}
 	_, want := jobs.ModelFor(j.Quality)
@@ -250,6 +250,12 @@ func (s *Store) Complete(ctx context.Context, leaseID, runnerID string, reported
 			}
 		}
 	}
+	// Close the lease first, and only if it is still active: the sweeper may
+	// have expired it between the check above and here, in which case the
+	// failure policy has already run for it and this call must not act.
+	if err := s.close(ctx, leaseID, StateCompleted); err != nil {
+		return err
+	}
 	p := jobs.StageStart(jobs.StatusFinalizing)
 	if err := jobs.Transition(ctx, s.pool, j.ID, jobs.StatusFinalizing, p, jobs.StatusMessage(jobs.StatusFinalizing, p)); err != nil {
 		if errors.Is(err, jobs.ErrTerminal) {
@@ -257,19 +263,31 @@ func (s *Store) Complete(ctx context.Context, leaseID, runnerID string, reported
 		}
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `UPDATE gpu_leases SET state = 'completed', heartbeat_at = now() WHERE id = $1`, leaseID)
-	return err
+	return nil
+}
+
+// close moves an active lease to state; ErrNotActive when it no longer is.
+func (s *Store) close(ctx context.Context, leaseID, state string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE gpu_leases SET state = $2, heartbeat_at = now() WHERE id = $1 AND state = 'active'`, leaseID, state)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotActive
+	}
+	return nil
 }
 
 // Fail closes the lease as failed. The job goes back to waiting unless it
 // has now failed MaxFailures times, in which case it is marked failed.
-// Returns whether the job was failed for good.
+// Returns whether the job was failed for good. A lease the sweeper expired
+// in the meantime answers ErrNotActive and is not counted twice.
 func (s *Store) Fail(ctx context.Context, leaseID, runnerID, reason string) (bool, error) {
 	l, err := s.active(ctx, leaseID, runnerID)
 	if err != nil {
 		return false, err
 	}
-	if _, err := s.pool.Exec(ctx, `UPDATE gpu_leases SET state = 'failed', heartbeat_at = now() WHERE id = $1`, leaseID); err != nil {
+	if err := s.close(ctx, leaseID, StateFailed); err != nil {
 		return false, err
 	}
 	return s.afterFailure(ctx, l.JobID, reason)
