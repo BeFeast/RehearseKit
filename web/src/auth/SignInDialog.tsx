@@ -1,9 +1,13 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useNavigate } from '@tanstack/react-router';
+import { useQuery } from '@tanstack/react-query';
 import * as api from '../api';
 import { ApiError } from '../api/client';
+import type { User } from '../api/types';
 import { Dialog } from '../components/Dialog';
 import { Icon } from '../components/Icon';
+import { buttonWidth, loadGis, type CredentialResponse } from '../lib/gis';
+import { useTheme } from '../lib/use-theme';
 import { useAuth } from './AuthProvider';
 
 type Mode = 'signin' | 'register';
@@ -13,7 +17,11 @@ type Banner =
   | { kind: 'inactive' }
   | { kind: 'google-blocked' }
   | { kind: 'google-soon' }
+  | { kind: 'google-unavailable' }
   | { kind: 'error'; message: string };
+
+/** GIS button lifecycle inside the dialog. */
+type GisState = 'off' | 'loading' | 'ready' | 'failed';
 
 export const PENDING_EMAIL_KEY = 'rk.pendingEmail';
 
@@ -21,6 +29,9 @@ export const PENDING_EMAIL_KEY = 'rk.pendingEmail';
  * Sign-in dialog (screens/05-sign-in): Google first, OR, email + password,
  * links to create an account. Registration swaps the same shell to a form
  * with name and password confirmation and ends on /pending-approval.
+ *
+ * Google is the official GIS button (popup flow, no One Tap): the ID token
+ * from its callback goes to POST /auth/google as-is.
  */
 export function SignInDialog() {
   const { signInOpen, closeSignIn, onSignedIn } = useAuth();
@@ -33,6 +44,12 @@ export function SignInDialog() {
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<Banner | null>(null);
   const [invalid, setInvalid] = useState(false);
+  const [gis, setGis] = useState<GisState>('off');
+  const gisHost = useRef<HTMLDivElement>(null);
+  const theme = useTheme();
+
+  const config = useQuery({ queryKey: ['config'], queryFn: api.getConfig, staleTime: Infinity, enabled: signInOpen });
+  const clientId = config.data?.google_sign_in ? config.data.google_client_id : '';
 
   useEffect(() => {
     if (!signInOpen) {
@@ -44,6 +61,7 @@ export function SignInDialog() {
       setBanner(null);
       setInvalid(false);
       setBusy(false);
+      setGis('off');
     }
   }, [signInOpen]);
 
@@ -52,6 +70,12 @@ export function SignInDialog() {
     setBanner(null);
     setInvalid(false);
   };
+
+  function pendingApproval(userEmail: string) {
+    sessionStorage.setItem(PENDING_EMAIL_KEY, userEmail);
+    closeSignIn();
+    void navigate({ to: '/pending-approval' });
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -69,9 +93,7 @@ export function SignInDialog() {
           return;
         }
         await api.register(email.trim(), password, name.trim());
-        sessionStorage.setItem(PENDING_EMAIL_KEY, email.trim());
-        closeSignIn();
-        void navigate({ to: '/pending-approval' });
+        pendingApproval(email.trim());
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -95,10 +117,92 @@ export function SignInDialog() {
     }
   }
 
-  function google() {
-    // POST /auth/google answers 501 in this build; the button stays so the
-    // primary path is visible, and explains itself instead of failing silently.
-    setBanner({ kind: 'google-soon' });
+  // GIS calls the callback it was initialised with; keep it pointing at the
+  // latest closure so state setters and onSignedIn are current.
+  const onCredentialRef = useRef<(r: CredentialResponse) => void>(() => undefined);
+  onCredentialRef.current = (r) => void onCredential(r);
+
+  async function onCredential(r: CredentialResponse) {
+    if (busy) return;
+    setBusy(true);
+    setBanner(null);
+    setInvalid(false);
+    try {
+      const user = await api.googleSignIn(r.credential);
+      await onSignedIn(user);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const bodyUser = (err.body as { user?: Partial<User> } | null)?.user;
+        if (err.code === 'pending_approval') {
+          // The 403 body carries the user; without an email the approval page
+          // would render blank, so stay in the dialog with the banner instead.
+          if (bodyUser?.email) pendingApproval(bodyUser.email);
+          else setBanner({ kind: 'not-approved' });
+        } else if (err.code === 'account_inactive') {
+          setBanner({ kind: 'inactive' });
+        } else if (err.code === 'email_not_verified') {
+          setBanner({ kind: 'error', message: 'Google reports this email address as unverified. Verify it with Google, or sign in with an email and password.' });
+        } else if (err.status === 401) {
+          setBanner({ kind: 'error', message: 'Google did not confirm your identity. Try again, or sign in with an email and password.' });
+        } else if (err.status === 501) {
+          setBanner({ kind: 'google-soon' });
+        } else if (err.status === 503) {
+          setBanner({ kind: 'error', message: 'Google sign-in is temporarily unavailable — the server could not reach Google. Try again in a minute, or use an email and password.' });
+        } else {
+          setBanner({ kind: 'error', message: err.message });
+        }
+      } else {
+        setBanner({ kind: 'error', message: 'Could not reach the server. Check your connection and try again.' });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Render the official button once the dialog is open in sign-in mode and
+  // the server has a client id. renderButton needs the host in the DOM.
+  useEffect(() => {
+    if (!signInOpen || mode !== 'signin' || !clientId) return;
+    let cancelled = false;
+    setGis('loading');
+    loadGis()
+      .then((g) => {
+        const host = gisHost.current;
+        if (cancelled || !host) return;
+        g.accounts.id.initialize({
+          client_id: clientId,
+          callback: (r) => onCredentialRef.current(r),
+          auto_select: false,
+          cancel_on_tap_outside: true,
+          ux_mode: 'popup',
+          itp_support: true,
+        });
+        host.replaceChildren();
+        g.accounts.id.renderButton(host, {
+          type: 'standard',
+          theme: theme === 'dark' ? 'filled_black' : 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'rectangular',
+          logo_alignment: 'center',
+          // The rest of the dialog is English; GIS otherwise follows the browser locale.
+          locale: 'en',
+          width: buttonWidth(host.clientWidth || 372),
+        });
+        setGis('ready');
+      })
+      .catch(() => {
+        if (!cancelled) setGis('failed');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [signInOpen, mode, clientId, theme]);
+
+  function googleFallback() {
+    // No GIS button to click: say why instead of failing silently.
+    if (!clientId) setBanner({ kind: 'google-soon' });
+    else if (gis === 'failed') setBanner({ kind: 'google-unavailable' });
   }
 
   const title = mode === 'signin' ? 'Sign in to RehearseKit' : 'Create your account';
@@ -106,6 +210,8 @@ export function SignInDialog() {
     mode === 'signin'
       ? 'Keep your jobs in one place and come back to them later.'
       : 'An administrator approves new accounts, usually within 24-48 hours.';
+
+  const googleButtonVisible = clientId && gis !== 'failed';
 
   return (
     <Dialog
@@ -128,9 +234,15 @@ export function SignInDialog() {
       <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--rk-space-7)' }}>
         {mode === 'signin' && (
           <>
-            <button className="rk-btn rk-btn--lg rk-btn--block" type="button" onClick={google} disabled={busy}>
-              <Icon name="google" size={18} /> Continue with Google
-            </button>
+            <div className="rk-google" data-state={googleButtonVisible ? gis : 'off'} data-testid="google-signin">
+              {/* The GIS iframe button lands here; the styled button is the placeholder while it loads and the fallback when it cannot. */}
+              <div ref={gisHost} className="rk-google-host" aria-busy={gis === 'loading' || undefined} />
+              {gis !== 'ready' && (
+                <button className="rk-btn rk-btn--lg rk-btn--block rk-google-fallback" type="button" onClick={googleFallback} disabled={busy || gis === 'loading'} aria-busy={gis === 'loading' || undefined}>
+                  <Icon name="google" size={18} /> {gis === 'loading' ? 'Loading Google sign-in…' : 'Continue with Google'}
+                </button>
+              )}
+            </div>
             <div className="rk-or">
               <i />
               OR
@@ -261,12 +373,21 @@ function SignInBanner({ banner }: { banner: Banner }) {
           </div>
         </div>
       );
+    case 'google-unavailable':
+      return (
+        <div className="rk-alert rk-alert--warn" role="status">
+          <Icon name="alert" size={18} />
+          <div>
+            <strong>Google sign-in could not load.</strong> A content blocker or network filter may be stopping accounts.google.com — allow it and reload, or sign in with an email and password below.
+          </div>
+        </div>
+      );
     case 'google-soon':
       return (
         <div className="rk-alert rk-alert--warn" role="status">
           <Icon name="alert" size={18} />
           <div>
-            <strong>Google sign-in is coming back soon.</strong> This build only supports email and password — use the form below.
+            <strong>Google sign-in is not enabled on this server.</strong> Use an email and password below.
           </div>
         </div>
       );

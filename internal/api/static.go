@@ -9,8 +9,10 @@ import (
 
 // spaHandler serves the embedded SPA: real files as-is (hashed assets get a
 // long cache), everything else falls back to index.html so client-side
-// routes work. Pages under /jobs/* carry the cross-origin isolation headers
-// the player needs (COOP same-origin + COEP credentialless).
+// routes work. Only the job page (/jobs/{id}) carries the cross-origin
+// isolation headers the player needs (COOP same-origin + COEP credentialless):
+// COOP same-origin also blocks the Google sign-in popup, so the list, the
+// landing page and everything else stay un-isolated and sign in there.
 func spaHandler(dist fs.FS) http.Handler {
 	fileServer := http.FileServerFS(dist)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +31,7 @@ func spaHandler(dist fs.FS) http.Handler {
 				return
 			}
 		}
-		if p == "/jobs" || strings.HasPrefix(p, "/jobs/") {
+		if isJobPage(p) {
 			w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 			w.Header().Set("Cross-Origin-Embedder-Policy", "credentialless")
 		}
@@ -38,4 +40,11 @@ func spaHandler(dist fs.FS) http.Handler {
 		r2.URL.Path = "/"
 		fileServer.ServeHTTP(w, r2)
 	})
+}
+
+// isJobPage reports whether a cleaned path is a single job page, /jobs/{id}:
+// not the list (/jobs), not deeper paths.
+func isJobPage(p string) bool {
+	id, ok := strings.CutPrefix(p, "/jobs/")
+	return ok && id != "" && !strings.Contains(id, "/")
 }

@@ -4,6 +4,7 @@ import * as api from '../api';
 import { ApiError } from '../api/client';
 import type { User } from '../api/types';
 import { allClaims, forgetClaim } from '../lib/claim-tokens';
+import { isIsolated, signInHandoffUrl } from '../lib/isolation';
 
 export interface AuthState {
   user: User | null;
@@ -11,7 +12,13 @@ export interface AuthState {
   loading: boolean;
   refresh(): Promise<User | null>;
   signOut(): Promise<void>;
-  /** Open the sign-in dialog; `next` runs after a successful sign-in. */
+  /**
+   * Open the sign-in dialog; `next` runs after a successful sign-in.
+   * On a cross-origin isolated document (the job page) there is no dialog:
+   * the call hands off to `/jobs?signin=1&next=<this page>` with a full
+   * load and `next` is dropped — the page itself is reloaded after sign-in,
+   * so callers on the job page must not rely on in-memory side effects.
+   */
   openSignIn(next?: () => void): void;
   closeSignIn(): void;
   signInOpen: boolean;
@@ -58,6 +65,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [qc]);
 
   const openSignIn = useCallback((next?: () => void) => {
+    if (isIsolated()) {
+      // The job page is cross-origin isolated (COOP same-origin for
+      // SharedArrayBuffer), which also blocks the Google sign-in popup. Hand
+      // off to the list with a full page load; it opens the dialog and comes
+      // back here after sign-in.
+      window.location.assign(signInHandoffUrl(window.location.pathname + window.location.search));
+      return;
+    }
     setAfter(() => next ?? null);
     setSignInOpen(true);
   }, []);

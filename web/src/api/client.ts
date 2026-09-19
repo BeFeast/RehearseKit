@@ -7,13 +7,16 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly requestId: string | null;
+  /** The decoded error envelope; some errors carry more than code/message (403 pending_approval has "user"). */
+  readonly body: unknown;
 
-  constructor(status: number, code: string, message: string, requestId: string | null = null) {
+  constructor(status: number, code: string, message: string, requestId: string | null = null, body: unknown = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.requestId = requestId;
+    this.body = body;
   }
 
   /** Route missing in this build (404) or declared but unimplemented (501). */
@@ -70,7 +73,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   }
   if (!res.ok) {
     const env = (data ?? {}) as { code?: string; message?: string };
-    throw new ApiError(res.status, env.code ?? '', env.message ?? res.statusText ?? 'request failed', rid);
+    throw new ApiError(res.status, env.code ?? '', env.message ?? res.statusText ?? 'request failed', rid, data);
   }
   return data as T;
 }

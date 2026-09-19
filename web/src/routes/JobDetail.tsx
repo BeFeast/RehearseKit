@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as api from '../api';
 import { ApiError, errorMessage } from '../api/client';
@@ -7,6 +6,7 @@ import { subscribeJobEvents } from '../api/sse';
 import type { Job, JobEvent, JobStatus } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { Progress, QualityBadge, Skeleton, StatusBadge } from '../components/Badge';
+import { AppLink } from '../components/AppLink';
 import { ConfirmDialog } from '../components/Dialog';
 import { PanelNotice } from '../components/EmptyState';
 import { Icon } from '../components/Icon';
@@ -20,6 +20,7 @@ import { Waveform } from '../components/mixer/Waveform';
 import { formatLoopSummary, formatRelative, hoursUntil } from '../lib/format';
 import { isSilenced } from '../lib/mix-state';
 import { canCancel, isActive, LAMPS, lampStates, overallProgress, STAGE_COPY, stageNoun, stemModelCaption } from '../lib/stages';
+import { useAppNavigate } from '../lib/use-app-navigate';
 import { useMixer, type Mixer } from '../player/use-mixer';
 import { jobRoute } from '../router';
 import { NotFoundScreen } from './Errors';
@@ -29,7 +30,7 @@ const JOB_KEY = (id: string) => ['jobs', 'detail', id] as const;
 /** /jobs/$id — one route for processing, completed, failed and cancelled. */
 export function JobDetailRoute() {
   const { id } = jobRoute.useParams();
-  const { user, loading: authLoading, openSignIn } = useAuth();
+  const { loading: authLoading, openSignIn } = useAuth();
   const qc = useQueryClient();
 
   const job = useQuery({
@@ -74,12 +75,9 @@ export function JobDetailRoute() {
     document.title = job.data ? `${job.data.project_name} — RehearseKit` : 'Job — RehearseKit';
   }, [job.data]);
 
-  // 401: an owned job without a session — sign-in dialog over an empty shell.
-  useEffect(() => {
-    if (job.error instanceof ApiError && job.error.status === 401 && !user) openSignIn(() => void job.refetch());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job.error, user]);
-
+  // 401: an owned job without a session. The page is cross-origin isolated
+  // (COOP blocks the Google popup), so "Open sign in" hands off to
+  // /jobs?signin=1&next=… (AuthProvider.openSignIn) instead of a dialog here.
   if (job.isPending || authLoading) return <LoadingSkeleton />;
   if (job.error) {
     const err = job.error;
@@ -121,7 +119,7 @@ export function JobDetailRoute() {
 }
 
 function JobPage({ job, lastEvent, frozenAt }: { job: Job; lastEvent: JobEvent | null; frozenAt: { status: JobStatus; progress: number } | null }) {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const qc = useQueryClient();
   const { toast } = useToast();
   const { user, openSignIn } = useAuth();
@@ -167,9 +165,9 @@ function JobPage({ job, lastEvent, frozenAt }: { job: Job; lastEvent: JobEvent |
   return (
     <main className="rk-shell" style={{ position: 'relative' }}>
       <div className="rk-pagehead">
-        <Link className="rk-back" to="/jobs" aria-label="Back to jobs">
+        <AppLink className="rk-back" to="/jobs" aria-label="Back to jobs">
           &larr;
-        </Link>
+        </AppLink>
         <div style={{ flex: 1, minWidth: 0 }}>
           <h1 className="rk-title">{job.project_name}</h1>
           <p className="rk-subtitle">Job ID: {job.id}</p>
@@ -531,9 +529,9 @@ function LoadingSkeleton() {
   return (
     <main className="rk-shell" style={{ position: 'relative' }} aria-busy="true" data-testid="job-loading">
       <div className="rk-pagehead">
-        <Link className="rk-back" to="/jobs" aria-label="Back to jobs">
+        <AppLink className="rk-back" to="/jobs" aria-label="Back to jobs">
           &larr;
-        </Link>
+        </AppLink>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--rk-space-5)' }}>
           <Skeleton height={27} width="44%" />
           <Skeleton height={12} width="28%" />
