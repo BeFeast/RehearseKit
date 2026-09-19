@@ -10,7 +10,7 @@ run it on a laptop. The legacy `backend/`, `frontend/`, `websocket/` and
 
 ```
 go.mod                          module github.com/BeFeast/RehearseKit (Go 1.26)
-cmd/rk/main.go                  serve | migrate | create-admin | worker (stub)
+cmd/rk/main.go                  serve | migrate | create-admin | import-legacy | worker (stub)
 internal/api/                   server wiring, middleware, error envelope, SPA
 internal/api/respond/           JSON + {"code","message"} helpers
 internal/auth/                  argon2id passwords, cookie sessions, approval, admin, Google sign-in
@@ -21,6 +21,7 @@ internal/storage/               on-disk layout under RK_DATA_DIR
 internal/db/                    pgx pool, embedded migrations, dbtest helper
 internal/pipeline/peaks/        .pk writer/reader (min/max mip pyramid)
 internal/config/                RK_* environment
+internal/legacy/                import-legacy: FastAPI users/jobs/stems -> rk schema + layout
 web/                            embedded web/dist (placeholder index.html)
 ```
 
@@ -197,8 +198,86 @@ Little-endian: `"RKPK"`, `u16 version=1`, `u16 channels`, `u32 sampleRate`,
 pairs of `int8 min, int8 max` (scale: `round(clamp(x,-1,1)*127)`). Default
 stages: shift 6, 9, 12, 15. See `internal/pipeline/peaks`.
 
+## Importing legacy data
+
+`rk import-legacy` moves users, jobs and stems out of the FastAPI/Celery
+deployment (`backend/app/models`) into the rk schema and storage layout. The
+legacy database is opened read-only (`default_transaction_read_only=on`);
+the legacy storage root is only read. Run it with the same `RK_DATABASE_URL`
+and `RK_DATA_DIR` the server uses.
+
+```bash
+rk import-legacy --legacy-db 'postgres://user:pass@host:5432/rehearsekit' \
+                 --legacy-dir /path/to/legacy/root \
+                 [--dry-run] [--copy | --hardlink] [--retention-days N]
+```
+
+Legacy layout expected under `--legacy-dir`:
+
+```
+stems/<job_id>/{vocals,drums,bass,other}.wav
+uploads/<job_id>_source.<ext>          original upload (wav/flac/mp3/...)
+<job_id>.zip                           legacy package (not imported)
+```
+
+What it does, per row:
+
+| Legacy | rk |
+|---|---|
+| `users.email` / `full_name` / `avatar_url` | `users.email` (lower-cased) / `name` / `avatar_url` |
+| `oauth_provider = 'google'` | `provider = 'google'` |
+| anything else (`NULL`, `email`) | `provider = 'password'`, `password_hash = NULL` (bcrypt is not migrated; the account needs a reset or Google sign-in) |
+| `is_admin` | `role = admin` / `user` |
+| `is_active` | `status = active` / `pending` |
+| `created_at`, `last_login_at` | copied |
+| user without email | skipped (its jobs become anonymous) |
+| existing rk account with the same email | merged: rk id, credentials, role and status are kept; empty `name`/`avatar_url` filled, `last_login_at`/`created_at` widened; legacy job owners are re-pointed to it |
+| `jobs.id` | same UUID |
+| `status` `COMPLETED`/`FAILED`/`CANCELLED` | `completed`/`failed`/`cancelled` |
+| any in-flight status (`PENDING` … `PACKAGING`) | `failed`, error `legacy job was <STATUS> at import time` (Celery state is gone; nothing can resume it) |
+| `COMPLETED` but not all four stems on disk | `failed`, error `legacy stems missing`, no stems copied |
+| `quality_mode` `fast`/`high` | `fast`/`high` |
+| `detected_bpm`, `error_message`, `created_at`, `completed_at` | copied; `completed_at` defaults to `created_at` for failed imports |
+| — | `expires_at = created_at + retention` (`RK_JOB_RETENTION_DAYS` or `--retention-days`) |
+| — | `duration_seconds`, `sample_rate`, `channels` from the first stem header |
+| `stems/<id>/<name>.wav` | `jobs/<id>/stems/<name>.wav` + row in `stems` (frames, sample_rate, bit_depth, channels from the WAV header, bytes from stat) + `jobs/<id>/peaks/<name>.pk` |
+| `uploads/<id>_source.<ext>` | `jobs/<id>/source.<ext>` + `jobs/<id>/peaks/source.pk` (non-WAV sources are decoded through `ffmpeg` when it is on `PATH`; otherwise the source peaks are skipped with a warning) |
+| — | one `job_events` row `imported from legacy` with the final status |
+
+Files are copied by default. `--hardlink` links instead and falls back to a
+copy per file when the link fails (different mount, read-only bind mount);
+the fallback count is reported. Files are placed first, then the job, its
+stems and its event are inserted in one transaction; on any error the job
+directory is removed so a re-run starts clean.
+
+Re-running is safe: users already present (by id or by email) and jobs whose
+id already exists are skipped. `--dry-run` produces the same report without
+writing files or rows. The report is JSON on stdout:
+
+```json
+{
+  "dry_run": false,
+  "users": {"imported": 1, "merged": 1, "existing": 0, "skipped": 0},
+  "jobs":  {"imported": 8, "imported_completed": 8, "imported_failed": 0, "existing": 0, "errors": 0},
+  "stems": 32, "peaks": 38, "bytes_copied": 3852000000, "hardlink_fallbacks": 0,
+  "user_results": [{"legacy_id": "...", "email": "...", "action": "merged", "id": "...", "reason": "..."}],
+  "job_results":  [{"id": "...", "action": "imported", "status": "completed", "stems": 4, "source": "source.flac", "source_peaks": true, "bytes": 123}]
+}
+```
+
+The exit status is non-zero when any job ended in `"action": "error"`.
+
+In Docker, mount the legacy root read-only next to the data volume:
+
+```bash
+docker run --rm --env-file .env -v /srv/rk/data:/data -v /srv/rehearsekit-legacy:/legacy:ro \
+  rk:local import-legacy --legacy-db 'postgres://...' --legacy-dir /legacy --dry-run
+```
+
+Take a `pg_dump` of the target database before the real run.
+
 ## Not in this phase
 
 `rk worker` (exits "not implemented"), the SPA, `/jobs/{id}/reprocess`,
-`/jobs/{id}/download`, `/jobs/{id}/mix`, `/profile`, the GPU-runner endpoints,
-retention cleanup and `import-legacy`.
+`/jobs/{id}/download`, `/jobs/{id}/mix`, `/profile`, the GPU-runner endpoints
+and retention cleanup.
