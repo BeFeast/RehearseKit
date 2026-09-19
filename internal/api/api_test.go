@@ -206,7 +206,12 @@ func TestHealthConfigAndSPA(t *testing.T) {
 		t.Errorf("spa fallback: %d", resp.StatusCode)
 	}
 	if resp.Header.Get("Cross-Origin-Opener-Policy") != "same-origin" || resp.Header.Get("Cross-Origin-Embedder-Policy") != "credentialless" {
-		t.Errorf("COOP/COEP on /jobs/*: %v", resp.Header)
+		t.Errorf("COOP/COEP on /jobs/{id}: %v", resp.Header)
+	}
+	// The list is where the Google popup opens, so it must not be isolated.
+	resp, _ = e.do(c, "GET", "/jobs", nil, nil)
+	if resp.StatusCode != 200 || resp.Header.Get("Cross-Origin-Opener-Policy") != "" || resp.Header.Get("Cross-Origin-Embedder-Policy") != "" {
+		t.Errorf("COOP/COEP on /jobs list: %d %v", resp.StatusCode, resp.Header)
 	}
 }
 
