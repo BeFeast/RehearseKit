@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stemkit"
+version = "0.1.0"
+description = "YouTube URL or audio file -> 5 stems (vocals/drums/bass/guitar/other) on a rented vast.ai GPU -> .dawproject"
+requires-python = ">=3.11"
+dependencies = [
+    "yt-dlp>=2025.10.14",
+    "numpy",
+    "soundfile>=0.12.1",
+    "librosa>=0.10.1",
+    "vastai>=0.2",
+]
+
+[project.scripts]
+stemkit = "stemkit.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["stemkit*"]
+
+[tool.setuptools.package-data]
+stemkit = ["remote/*.sh"]

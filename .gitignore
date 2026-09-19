@@ -113,3 +113,7 @@ service-account-key.json
 # Plan files
 *.plan.md
 
+
+# stemkit
+tools/stemkit/.venv/
+tools/stemkit/*.egg-info/
