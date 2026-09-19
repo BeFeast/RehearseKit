@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from '@tanstack/react-router';
+import { useAppNavigate } from '../lib/use-app-navigate';
 import { useQuery } from '@tanstack/react-query';
 import * as api from '../api';
 import { ApiError, errorMessage } from '../api/client';
@@ -30,7 +30,7 @@ const ONE_GB = 1024 * 1024 * 1024;
 
 /** screens/03-landing-upload: one form, two modes, feature blurbs beneath. */
 export function LandingRoute() {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const { user, openSignIn } = useAuth();
   const { toast } = useToast();
   const config = useQuery({ queryKey: ['config'], queryFn: api.getConfig, staleTime: Infinity });
@@ -273,7 +273,8 @@ export function LandingRoute() {
               />
             )}
 
-            <div className="rk-formgrid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 'var(--rk-space-8)', alignItems: 'end' }}>
+            {/* Two columns, labels on one row, input and segmented control on one baseline (same height); the help lines sit under the form, left, with the button bottom-right on the last help line. */}
+            <div className="rk-formgrid">
               <div className="rk-field">
                 <label htmlFor="pname">Project name</label>
                 <input
@@ -290,29 +291,33 @@ export function LandingRoute() {
               </div>
               <div className="rk-field">
                 <label id="qlabel">Processing quality</label>
-                <div className="rk-seg" role="group" aria-labelledby="qlabel">
+                <div className="rk-seg rk-seg--field" role="group" aria-labelledby="qlabel" aria-describedby="qhelp">
                   {(['fast', 'high', 'high6'] as Quality[]).map((q) => (
                     <button key={q} type="button" aria-pressed={quality === q} onClick={() => setQuality(q)}>
                       {QUALITY_LABEL[q]}
                     </button>
                   ))}
                 </div>
-                <span className="rk-help">{QUALITY_HELP[quality]}</span>
               </div>
             </div>
 
             {mode === 'file' && file && <AudioPreview file={file} info={fileInfo} />}
 
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--rk-space-8)', flexWrap: 'wrap' }}>
-              <span className="rk-help">
-                {mode === 'url'
-                  ? urlState.kind === 'fetching'
-                    ? 'Reading the video page. This usually takes a second or two.'
-                    : 'Only download audio you have the right to use.'
-                  : fileError
-                    ? 'The file never left your machine — type and size are checked before upload starts.'
-                    : `WAV, MP3, FLAC and AIFF up to ${formatBytes(maxBytes)}. Lossless is recommended — separation quality follows the source.`}
-              </span>
+            <div className="rk-formfoot">
+              <div className="rk-formfoot-help">
+                <span className="rk-help" id="qhelp" data-testid="quality-help">
+                  {QUALITY_HELP[quality]}
+                </span>
+                <span className="rk-help">
+                  {mode === 'url'
+                    ? urlState.kind === 'fetching'
+                      ? 'Reading the video page. This usually takes a second or two.'
+                      : 'Only download audio you have the right to use.'
+                    : fileError
+                      ? 'The file never left your machine — type and size are checked before upload starts.'
+                      : `WAV, MP3, FLAC and AIFF up to ${formatBytes(maxBytes)}. Lossless is recommended — separation quality follows the source.`}
+                </span>
+              </div>
               <button className="rk-btn rk-btn--primary rk-btn--lg" type="button" disabled={!hasSource || creating} aria-busy={creating || undefined} onClick={() => void submit()} data-testid="submit-job">
                 {creating ? 'Creating job…' : anonymous ? 'Separate stems anonymously' : 'Separate stems'}
               </button>

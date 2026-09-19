@@ -179,3 +179,24 @@
 
 /* details block on the error boundary */
 .rk-detail pre { margin: var(--rk-space-5) 0 0; padding: var(--rk-space-6); border-radius: var(--rk-radius-md); background: var(--rk-color-well); font-size: var(--rk-font-size-md); white-space: pre-wrap; }
+
+/* page head row (job history): title + actions, actions wrap under on narrow screens */
+.rk-pagehead-row { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--rk-space-8); margin-bottom: var(--rk-space-9); flex-wrap: wrap; }
+.rk-section-title { margin: 0 0 var(--rk-space-7); font-size: var(--rk-font-size-lg); font-weight: var(--rk-font-weight-semibold); }
+
+/* upload form: project name + quality on one row with the labels level and both
+   controls 34px tall; the help lines sit under the form on the left and the
+   primary button bottom-right on the last help line */
+.rk-formgrid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--rk-space-8); align-items: start; }
+.rk-seg--field { height: 34px; padding: 2px; }
+.rk-seg--field button { height: 28px; }
+.rk-formfoot { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--rk-space-8); flex-wrap: wrap; }
+.rk-formfoot-help { display: flex; flex-direction: column; gap: var(--rk-space-3); flex: 1 1 36ch; min-width: 0; max-width: 78ch; }
+.rk-formfoot > .rk-btn { flex: none; margin-left: auto; }
+
+/* Google sign-in: the GIS iframe button renders into the host; the styled
+   button is the placeholder while it loads and the fallback when it cannot */
+.rk-google { position: relative; min-height: 42px; }
+.rk-google-host { display: flex; justify-content: center; }
+.rk-google[data-state="ready"] .rk-google-host { min-height: 42px; }
+.rk-google:not([data-state="ready"]) .rk-google-host { position: absolute; inset: 0; visibility: hidden; }
