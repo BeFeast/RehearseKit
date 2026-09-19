@@ -18,7 +18,9 @@ import (
 	"github.com/BeFeast/RehearseKit/internal/auth"
 	"github.com/BeFeast/RehearseKit/internal/auth/googleid"
 	"github.com/BeFeast/RehearseKit/internal/config"
+	"github.com/BeFeast/RehearseKit/internal/gpu"
 	"github.com/BeFeast/RehearseKit/internal/jobs"
+	"github.com/BeFeast/RehearseKit/internal/signed"
 	"github.com/BeFeast/RehearseKit/internal/stems"
 	"github.com/BeFeast/RehearseKit/internal/storage"
 	"github.com/BeFeast/RehearseKit/internal/youtube"
@@ -74,6 +76,14 @@ func New(cfg config.Config, pool *pgxpool.Pool) (*Server, error) {
 	jobHandlers.Register(mux)
 	stems.NewHandlers(jobHandlers, layout).Register(mux)
 	ytHandlers.Register(mux)
+	signer := signed.New(cfg.SigningKey)
+	signed.NewHandlers(signer, layout).Register(mux)
+	gpu.NewHandlers(gpu.NewStore(pool, cfg.LeaseTTL), signer, layout, gpu.Options{
+		RunnerToken: cfg.RunnerToken, PublicURL: cfg.PublicURL, SignedURLTTL: cfg.SignedURLTTL,
+	}).Register(mux)
+	if cfg.RunnerToken == "" {
+		slog.Warn("RK_RUNNER_TOKEN is not set; the GPU runner API is disabled")
+	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		respond.Fail(w, respond.ErrNotFound)
 	})
@@ -136,6 +146,8 @@ func publicConfig(cfg config.Config, youtubePreview bool) map[string]any {
 		"google_client_id":     cfg.GoogleClientID,
 		"google_sign_in":       cfg.GoogleClientID != "",
 		"youtube_preview":      youtubePreview,
+		"gpu_runner_api":       cfg.RunnerToken != "",
+		"max_duration_seconds": int(cfg.MaxDuration.Seconds()),
 		"max_upload_bytes":     cfg.MaxUploadBytes,
 		"anon_retention_hours": int(cfg.AnonRetention.Hours()),
 		"job_retention_days":   int(cfg.JobRetention.Hours() / 24),

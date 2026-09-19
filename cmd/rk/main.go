@@ -1,10 +1,11 @@
 // Command rk is the RehearseKit server binary.
 //
-//	rk serve          run the HTTP API (+ embedded SPA)
+//	rk serve          run the HTTP API (+ embedded SPA, GPU lease API)
 //	rk migrate        apply embedded schema migrations
 //	rk create-admin   create or reset a password admin account
 //	rk import-legacy  copy users/jobs/stems from the FastAPI deployment
-//	rk worker         (not implemented yet; phase 3)
+//	rk worker         run the CPU pipeline worker and sweepers
+//	rk gpu-agent      run the GPU runner loop (on the GPU box)
 package main
 
 import (
@@ -16,15 +17,18 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/BeFeast/RehearseKit/internal/agent"
 	"github.com/BeFeast/RehearseKit/internal/api"
 	"github.com/BeFeast/RehearseKit/internal/auth"
 	"github.com/BeFeast/RehearseKit/internal/config"
 	"github.com/BeFeast/RehearseKit/internal/db"
 	"github.com/BeFeast/RehearseKit/internal/legacy"
 	"github.com/BeFeast/RehearseKit/internal/storage"
+	"github.com/BeFeast/RehearseKit/internal/worker"
 )
 
 func main() {
@@ -44,8 +48,9 @@ func main() {
 	case "import-legacy":
 		err = runImportLegacy(os.Args[2:])
 	case "worker":
-		fmt.Fprintln(os.Stderr, "rk worker: not implemented (phase 3)")
-		os.Exit(2)
+		err = runWorker(os.Args[2:])
+	case "gpu-agent":
+		err = runGPUAgent(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 		return
@@ -64,12 +69,13 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: rk <command> [flags]
 
 commands:
-  serve          run the HTTP server (RK_LISTEN_ADDR, RK_DATA_DIR, RK_DATABASE_URL, ...)
+  serve          run the HTTP server (RK_LISTEN_ADDR, RK_DATA_DIR, RK_DATABASE_URL, RK_RUNNER_TOKEN, ...)
   migrate        apply schema migrations (RK_DATABASE_URL)
   create-admin   --email <e> --password <p>  create or reset an admin (RK_DATABASE_URL)
   import-legacy  --legacy-db <dsn> --legacy-dir <path> [--dry-run] [--copy|--hardlink]
                  [--retention-days N]  import the FastAPI deployment (RK_DATABASE_URL, RK_DATA_DIR)
-  worker         not implemented yet`)
+  worker         run the CPU pipeline worker (RK_DATABASE_URL, RK_DATA_DIR, RK_PYTHON, RK_LOCAL_DEMUCS)
+  gpu-agent      run the GPU runner (RK_API_URL, RK_RUNNER_TOKEN, RK_RUNNER_ID; --once, --poll, --device)`)
 }
 
 func logLevel() slog.Level {
@@ -166,6 +172,76 @@ func runCreateAdmin(args []string) error {
 	}
 	slog.Info("admin ready", "id", u.ID, "email", u.Email)
 	return nil
+}
+
+func runWorker(args []string) error {
+	fs := flag.NewFlagSet("worker", flag.ExitOnError)
+	poll := fs.Duration("poll", 2*time.Second, "queue polling / cancellation check interval")
+	adopt := fs.Bool("adopt", true, "resume jobs left in separating/finalizing/packaging by a previous worker")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.FromEnv()
+	if err != nil {
+		return err
+	}
+	layout, err := storage.New(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := signalContext()
+	defer cancel()
+	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	w := worker.New(cfg, pool, layout)
+	w.Poll = *poll
+	w.Adopt = *adopt
+	return w.Run(ctx)
+}
+
+func runGPUAgent(args []string) error {
+	fs := flag.NewFlagSet("gpu-agent", flag.ExitOnError)
+	apiURL := fs.String("api", os.Getenv("RK_API_URL"), "base URL of rk serve (or RK_API_URL)")
+	token := fs.String("token", os.Getenv("RK_RUNNER_TOKEN"), "runner token (or RK_RUNNER_TOKEN)")
+	runnerID := fs.String("id", os.Getenv("RK_RUNNER_ID"), "runner id shown in leases (or RK_RUNNER_ID; default hostname)")
+	python := fs.String("python", envOr("RK_PYTHON", "python3"), "python with demucs installed (or RK_PYTHON)")
+	device := fs.String("device", envOr("RK_DEMUCS_DEVICE", "cuda"), "demucs device: cuda or cpu (or RK_DEMUCS_DEVICE)")
+	workDir := fs.String("work-dir", os.Getenv("RK_WORK_DIR"), "scratch directory (or RK_WORK_DIR; default $TMPDIR/rk-gpu)")
+	poll := fs.Duration("poll", envDuration("RK_POLL_INTERVAL", 5*time.Second), "idle polling interval (or RK_POLL_INTERVAL)")
+	once := fs.Bool("once", os.Getenv("RK_ONCE") == "1", "process one job and exit (or RK_ONCE=1)")
+	extra := fs.String("demucs-args", os.Getenv("RK_DEMUCS_ARGS"), "extra demucs arguments, space separated (or RK_DEMUCS_ARGS), e.g. \"--segment 7\"")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	a, err := agent.New(agent.Config{
+		APIURL: *apiURL, Token: *token, RunnerID: *runnerID, Python: *python, Device: *device,
+		WorkDir: *workDir, Poll: *poll, Once: *once, DemucsExtra: strings.Fields(*extra),
+	})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := signalContext()
+	defer cancel()
+	return a.Run(ctx)
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
 }
 
 func runImportLegacy(args []string) error {

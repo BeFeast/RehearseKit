@@ -107,7 +107,7 @@ func (s *Store) Create(ctx context.Context, id string, p CreateParams) (*Job, er
 	if err != nil {
 		return nil, err
 	}
-	if err := emit(ctx, tx, id, StatusPending, 0, "queued"); err != nil {
+	if err := emit(ctx, tx, id, StatusPending, 0, StatusMessage(StatusPending, 0)); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {

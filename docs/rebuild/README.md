@@ -1,27 +1,40 @@
-# RehearseKit rebuild (`rk`) — phase 2 skeleton
+# RehearseKit rebuild (`rk`) — phases 2–3
 
 The rebuild replaces FastAPI + Celery + Redis + the websocket service with
-one Go binary, `rk`, that serves the API, the embedded SPA and (from phase 3)
-the CPU worker. This document covers what exists after phase 2 and how to
-run it on a laptop. The legacy `backend/`, `frontend/`, `websocket/` and
+one Go binary, `rk`, that serves the API, the embedded SPA, the CPU worker
+and the GPU runner. This document covers what exists after phase 3 and how
+to run it on a laptop. The legacy `backend/`, `frontend/`, `websocket/` and
 `stemd/` trees are untouched until phase 5.
 
 ## Layout
 
 ```
 go.mod                          module github.com/BeFeast/RehearseKit (Go 1.26)
-cmd/rk/main.go                  serve | migrate | create-admin | import-legacy | worker (stub)
+cmd/rk/main.go                  serve | migrate | create-admin | import-legacy | worker | gpu-agent
 internal/api/                   server wiring, middleware, error envelope, SPA
 internal/api/respond/           JSON + {"code","message"} helpers
 internal/auth/                  argon2id passwords, cookie sessions, approval, admin, Google sign-in
 internal/auth/googleid/         Google ID-token verification (JWKS cache, RS256), stdlib only
-internal/jobs/                  job model, queue (SKIP LOCKED), events + NOTIFY, SSE
+internal/jobs/                  job model, queue (SKIP LOCKED), events + NOTIFY, SSE,
+                                stage bands + legacy status copy (stages.go)
 internal/stems/                 Range-served WAV + peaks (from stemd)
 internal/storage/               on-disk layout under RK_DATA_DIR
 internal/db/                    pgx pool, embedded migrations, dbtest helper
+internal/signed/                HMAC signed URLs; GET source / PUT stem endpoints
+internal/gpu/                   GPU lease API (claim, heartbeat, complete, fail, expiry)
+internal/worker/                rk worker: CPU stages, GPU wait, sweepers
+internal/agent/                 rk gpu-agent: lease → demucs → upload loop
 internal/pipeline/peaks/        .pk writer/reader (min/max mip pyramid)
+internal/pipeline/media/        ffprobe / ffmpeg / yt-dlp wrappers (ctx-killed)
+internal/pipeline/tempo/        tempo.json model + runner for tools/tempo/tempo.py
+internal/pipeline/demucs/       demucs runner + tqdm progress folding
+internal/pipeline/dawproject/   DAWproject 1.0 writer (golden-tested XML)
+internal/pipeline/pack/         package.zip + README
+internal/pipeline/wavcheck/     24-bit/48 kHz/stereo WAV validation
 internal/config/                RK_* environment
 internal/legacy/                import-legacy: FastAPI users/jobs/stems -> rk schema + layout
+tools/tempo/tempo.py            librosa tempo analyser (confidence-gated)
+deploy/gpu-runner/              CUDA image for the runner + vast.ai runbook
 web/                            embedded web/dist (placeholder index.html)
 ```
 
@@ -37,6 +50,18 @@ web/                            embedded web/dist (placeholder index.html)
 | `RK_MAX_UPLOAD_BYTES` | `1073741824` | multipart upload cap |
 | `RK_GOOGLE_CLIENT_ID` | empty | OAuth client id; enables `POST /api/v1/auth/google` and `google_sign_in:true` in `/api/v1/config` |
 | `RK_LOG_LEVEL` | `INFO` | slog level |
+| `RK_RUNNER_TOKEN` | empty | bearer token for GPU runners on `/api/v1/gpu/*`; empty disables that API (503 `gpu_disabled`) |
+| `RK_SIGNING_KEY` | derived from `RK_RUNNER_TOKEN` | HMAC key for signed source/stem URLs |
+| `RK_PUBLIC_URL` | derived from the request | base of the absolute signed URLs handed to runners |
+| `RK_GPU_LEASE_TTL` | `10m` | a lease without a heartbeat for this long expires and the job is re-offered |
+| `RK_SIGNED_URL_TTL` | `2h` | lifetime of the signed URLs in a lease |
+| `RK_MAX_DURATION_SECONDS` | `1800` | worker rejects longer sources (`Audio is too long: …`) |
+| `RK_PYTHON` | `python3` | interpreter for `tools/tempo/tempo.py` (needs librosa) and local demucs |
+| `RK_TOOLS_DIR` | `./tools` | where `tempo/tempo.py` lives |
+| `RK_TEMPO_CMD` | empty | replaces the analyser command entirely (tests) |
+| `RK_LOCAL_DEMUCS` | unset | `1` makes the worker run `python -m demucs` itself (dev; no GPU runner needed) |
+| `RK_DEMUCS_DEVICE` | `cpu` (worker) / `cuda` (agent) | demucs `-d` |
+| `RK_GPU_WAIT_TIMEOUT` | `3h` | a job waiting in `separating` with no runner ever leasing it fails after this |
 
 ## Run locally
 
@@ -54,12 +79,105 @@ go run ./cmd/rk migrate
 # 3. An admin so you can sign in (re-running resets the password)
 go run ./cmd/rk create-admin --email admin@example.com --password 'change-me-please'
 
-# 4. Serve
+# 4. Serve (RK_RUNNER_TOKEN enables the GPU lease API)
+export RK_RUNNER_TOKEN=$(openssl rand -hex 24)
 go run ./cmd/rk serve
+
+# 5. Worker (needs ffmpeg, ffprobe, yt-dlp on PATH and a python with librosa)
+python3 -m venv .venv && .venv/bin/pip install -r tools/tempo/requirements.txt
+RK_PYTHON=$PWD/.venv/bin/python go run ./cmd/rk worker
+
+# 6a. Separation on a GPU box (see deploy/gpu-runner/README.md), or
+# 6b. locally for development (slow on CPU; needs `pip install demucs` in RK_PYTHON)
+RK_LOCAL_DEMUCS=1 RK_PYTHON=$PWD/.venv/bin/python go run ./cmd/rk worker
 ```
 
 `GET /` answers with the placeholder page until the SPA is built into
 `web/dist` in phase 4.
+
+## Pipeline (`rk worker`)
+
+One process, one job at a time. `jobs.Claim` takes the oldest `pending`
+job; each stage owns a band of the 0–100 progress and emits `job_events`
+with the legacy caption strings (`jobs.StatusMessage`, verbatim from the
+old `job-card.tsx`) so the SPA can keep its copy.
+
+| Stage | Progress | Work | Output under `jobs/<id>/` |
+|---|---|---|---|
+| converting | 0–14 | ffprobe duration check (≤ `RK_MAX_DURATION_SECONDS`), `yt-dlp -x --audio-format wav` for YouTube jobs, `ffmpeg -ar 48000 -ac 2 -c:a pcm_s24le` | `source.wav` |
+| analyzing | 14–28 | `tools/tempo/tempo.py` (librosa), source peaks, `jobs.detected_bpm/duration_seconds/sample_rate/channels` | `tempo.json`, `peaks/source.pk` |
+| separating | 28–76 | GPU lease (below) or `RK_LOCAL_DEMUCS=1`; progress from runner heartbeats | `stems/<name>.wav` |
+| finalizing | 76–89 | verify each stem is 24-bit/48 kHz/stereo, per-stem peaks, `stems` rows, DAWproject | `peaks/<name>.pk`, `project.dawproject` |
+| packaging | 89–99 | zip (stems stored, text deflated) | `package.zip` |
+| completed | 100 | | |
+
+Every external tool runs under a context: a stage timeout (20 min
+convert, 15 min analyse, 20 min finalise/package) or a job cancel
+(`POST /jobs/{id}/cancel`, polled every 2 s) kills the child process
+and the run stops; a cancelled job is left `cancelled`, anything else
+becomes `failed` with a user-facing message (`Audio is too long: 35:12
+exceeds the 30:00 limit`, `Conversion failed: …`, `Stem separation
+failed after 3 attempts: …`).
+
+Tempo: `bpm` is `null` when the analyser's confidence (mean of local-tempo
+consistency and inter-beat regularity, see the docstring in `tempo.py`) is
+below 0.5. A null tempo yields a 120 BPM placeholder in the DAWproject with
+a Comment in `metadata.xml` and the README; the audio still plays at the
+original speed because the clip warps map seconds onto beats.
+
+DAWproject (`project.dawproject`): zip with `project.xml`
+(Application, Transport/Tempo + TimeSignature, Structure with one
+`Track/Channel` per stem routed to a master, Arrangement/Lanes
+(timeUnit=beats) → Lanes(track) → Clips → Clip → Warps
+(contentTimeUnit=seconds) → Audio/File + two Warp markers `(0,0)` and
+`(songBeats, songSeconds)`), `metadata.xml` (Title, Year, Comment) and
+`audio/<name>.wav` copies. Golden test:
+`internal/pipeline/dawproject/testdata/project.xml` (`go test -update`
+to regenerate).
+
+Sweepers (in the worker process): expired GPU leases every 30 s, jobs stuck
+in a CPU stage with no event for 45 min every 5 min (→ failed), retention
+(`DELETE … WHERE expires_at < now()` + directory removal) every 10 min.
+On start the worker adopts jobs left in `separating`/`finalizing`/
+`packaging` by a previous process (`--adopt=false` to disable when running
+several workers); on SIGTERM a job still in converting/analyzing goes back
+to `pending`.
+
+## GPU runners (`rk gpu-agent`)
+
+Pull model — the GPU box needs no inbound port and no database access.
+
+```
+runner                                   rk serve
+  POST /api/v1/gpu/lease  ──────────────▶ oldest job in `separating` with no active lease
+  ◀── {lease_id, job_id, model, stems, source_url, upload_urls{stem→PUT}, expires_at, heartbeat_seconds}
+  GET  source_url (signed, 2 h) ────────▶ jobs/<id>/source.wav
+  python -m demucs -n <model> --flac --int24 -d cuda
+  POST /gpu/lease/{id}/heartbeat {progress 0..1} ─▶ extends TTL, job progress 28–76 %
+  ffmpeg flac → 24-bit/48 kHz wav
+  PUT  upload_urls[stem] (Content-Length ≤ 2 GiB) ─▶ jobs/<id>/stems/<stem>.wav (temp + rename)
+  POST /gpu/lease/{id}/complete {stems:[{name,bytes,sha256}]} ─▶ verify size/sha/WAV header → job finalizing
+  POST /gpu/lease/{id}/fail {error} ────▶ lease failed; job re-offered, or failed after 3 attempts
+```
+
+All `/api/v1/gpu/*` calls carry `Authorization: Bearer $RK_RUNNER_TOKEN`
+(401 `runner_unauthorized`). Lease errors: 404 `lease_not_found`, 403
+`lease_owner` (another runner id), 410 `lease_closed` (expired/finished),
+409 `job_gone` (cancelled — the agent kills demucs), 400 `bad_stems`.
+An empty queue answers 204.
+
+Signed URLs are `path?exp=<unix>&sig=<base64url HMAC-SHA256(method\npath\nexp)>`
+over `RK_SIGNING_KEY`; the method is part of the MAC so a GET link can not
+be replayed as a PUT. Served by `GET/HEAD /api/v1/signed/jobs/{id}/source`
+and `PUT /api/v1/signed/jobs/{id}/stems/{name}`.
+
+Leases live in `gpu_leases`; at most one is active per job (partial unique
+index, migration 0002). A lease that misses heartbeats for
+`RK_GPU_LEASE_TTL` is expired by the worker sweeper and the job goes back
+to waiting; three failed/expired leases fail the job.
+
+Image, flags and the vast.ai rent → run → destroy flow:
+[`deploy/gpu-runner/README.md`](../../deploy/gpu-runner/README.md).
 
 ## curl tour
 
@@ -189,6 +307,10 @@ RK_TEST_DATABASE_URL=postgres://rk:rk@127.0.0.1:15432/rk go test ./...
 Database-backed tests skip when `RK_TEST_DATABASE_URL` is unset. Each test
 gets its own schema (`rk_test_<hex>`) with `search_path` pointed at it, so
 packages run in parallel against one database and clean up after themselves.
+The worker integration test (`internal/worker`) needs ffmpeg/ffprobe on
+PATH (skips otherwise), uses a stub tempo command and a fake in-process GPU
+runner, and exercises upload → convert → analyse → lease → finalise →
+package on a synthetic WAV.
 
 ## Peaks file (`.pk`)
 
@@ -278,6 +400,4 @@ Take a `pg_dump` of the target database before the real run.
 
 ## Not in this phase
 
-`rk worker` (exits "not implemented"), the SPA, `/jobs/{id}/reprocess`,
-`/jobs/{id}/download`, `/jobs/{id}/mix`, `/profile`, the GPU-runner endpoints
-and retention cleanup.
+`/jobs/{id}/reprocess`, `/jobs/{id}/mix`, `/profile` and the SPA (phase 4).
