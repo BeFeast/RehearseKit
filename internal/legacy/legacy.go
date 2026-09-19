@@ -96,12 +96,15 @@ type JobResult struct {
 	// Action is imported, existing (id already present) or error.
 	Action string `json:"action"`
 	// Status is the rk status the job was (or would be) written with.
-	Status      string `json:"status,omitempty"`
-	Error       string `json:"error,omitempty"`
-	Stems       int    `json:"stems"`
-	Source      string `json:"source,omitempty"`
-	SourcePeaks bool   `json:"source_peaks"`
-	Bytes       int64  `json:"bytes"`
+	Status string `json:"status,omitempty"`
+	Error  string `json:"error,omitempty"`
+	Stems  int    `json:"stems"`
+	Source string `json:"source,omitempty"`
+	// SourcePeaks reports whether peaks/source.pk was written. In a dry
+	// run it is a prediction: the source parses as a supported WAV, or
+	// ffmpeg is on PATH to decode it.
+	SourcePeaks bool  `json:"source_peaks"`
+	Bytes       int64 `json:"bytes"`
 }
 
 // Summary is the JSON report printed by `rk import-legacy`.
@@ -304,7 +307,7 @@ func (im *Importer) importUser(ctx context.Context, u legacyUser) (UserResult, e
 		}
 		_, err = im.target.Exec(ctx, `UPDATE users SET
 			name = CASE WHEN name = '' THEN $2 ELSE name END,
-			avatar_url = COALESCE(avatar_url, $3),
+			avatar_url = COALESCE(NULLIF(avatar_url, ''), $3),
 			last_login_at = GREATEST(last_login_at, $4),
 			created_at = LEAST(created_at, $5)
 			WHERE id = $1`, existingID, name, avatar, u.LastLoginAt, u.CreatedAt)
@@ -441,7 +444,7 @@ func (im *Importer) importJob(ctx context.Context, j legacyJob) JobResult {
 			res.Bytes += st.Size()
 		}
 	}
-	res.SourcePeaks = src != "" && (srcExt == "wav" || ffmpegAvailable())
+	res.SourcePeaks = src != "" && sourcePeaksPossible(src)
 	res.Action = "imported"
 	if im.opts.DryRun {
 		return res
@@ -735,6 +738,16 @@ func writeSourcePeaks(ctx context.Context, srcPath, pkPath string) error {
 		return fmt.Errorf("ffmpeg: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return writePeaks(tmp, pkPath)
+}
+
+// sourcePeaksPossible predicts whether writeSourcePeaks can succeed for
+// src without decoding it: the header parses as a supported WAV, or ffmpeg
+// is available to transcode it.
+func sourcePeaksPossible(src string) bool {
+	if _, err := wavHeader(src); err == nil {
+		return true
+	}
+	return ffmpegAvailable()
 }
 
 func ffmpegAvailable() bool {

@@ -167,8 +167,8 @@ func seedLegacy(t *testing.T, legacy *pgxpool.Pool, dir string, withFlac bool) i
 			t.Fatalf("%s: %v", sql, err)
 		}
 	}
-	mustExec(`INSERT INTO users (id, email, hashed_password, full_name, is_admin, is_active, oauth_provider, created_at, last_login_at)
-		VALUES ($1, 'Admin@Example.com', '$2b$12$legacy', 'Oleg Kossoy', true, true, NULL, $2, $3)`, uAdmin, t0, t0.Add(time.Hour))
+	mustExec(`INSERT INTO users (id, email, hashed_password, full_name, avatar_url, is_admin, is_active, oauth_provider, created_at, last_login_at)
+		VALUES ($1, 'Admin@Example.com', '$2b$12$legacy', 'Oleg Kossoy', 'https://img.example/admin.png', true, true, NULL, $2, $3)`, uAdmin, t0, t0.Add(time.Hour))
 	mustExec(`INSERT INTO users (id, email, full_name, avatar_url, is_admin, is_active, oauth_provider, oauth_id, created_at)
 		VALUES ($1, 'g@example.com', 'G User', 'https://img.example/g.png', false, true, 'google', '123', $2)`, uGoogle, t0)
 	mustExec(`INSERT INTO users (id, email, hashed_password, full_name, is_admin, is_active, created_at)
@@ -214,6 +214,11 @@ func seedLegacy(t *testing.T, legacy *pgxpool.Pool, dir string, withFlac bool) i
 	}
 	writeWAV(t, filepath.Join(dir, "uploads", jCompleted+"_source.wav"), 2000)
 	writeWAV(t, filepath.Join(dir, "uploads", jNoStems+"_source.wav"), 700)
+	// jFailed has a "wav" that is not a WAV: source_peaks must be predicted
+	// from the header (or ffmpeg), not from the extension.
+	if err := os.WriteFile(filepath.Join(dir, "uploads", jFailed+"_source.wav"), []byte("not a wav"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	if withFlac {
 		job(jFlac, "COMPLETED", uGoogle, "upload", "Flac Source", t0.Add(120*time.Hour),
@@ -247,6 +252,10 @@ func TestImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// An empty-string avatar must count as unset for the merge.
+	if _, err := target.Exec(ctx, `UPDATE users SET avatar_url = '' WHERE id = $1`, admin.ID); err != nil {
+		t.Fatal(err)
+	}
 	layout, err := storage.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -265,6 +274,14 @@ func TestImport(t *testing.T) {
 	}
 	if sum.Jobs.Imported != nJobs || sum.Jobs.Errors != 0 || sum.Jobs.ImportedCompleted != nJobs-3 || sum.Jobs.ImportedFailed != 3 {
 		t.Fatalf("dry-run jobs: %+v", sum.Jobs)
+	}
+	for _, r := range sum.JobResults {
+		if r.ID == jFailed && r.SourcePeaks != withFlac { // only ffmpeg could rescue a bogus WAV
+			t.Fatalf("dry-run source_peaks prediction for a bogus wav: %+v", r)
+		}
+		if r.ID == jCompleted && !r.SourcePeaks {
+			t.Fatalf("dry-run source_peaks prediction for a real wav: %+v", r)
+		}
 	}
 	var count int
 	if err := target.QueryRow(ctx, `SELECT count(*) FROM jobs`).Scan(&count); err != nil || count != 0 {
@@ -309,6 +326,9 @@ func TestImport(t *testing.T) {
 	}
 	if a.LastLoginAt == nil {
 		t.Fatal("admin merge: last_login_at not carried over")
+	}
+	if a.AvatarURL == nil || *a.AvatarURL != "https://img.example/admin.png" {
+		t.Fatalf("admin merge: avatar not filled: %v", a.AvatarURL)
 	}
 	g, err := users.UserByID(ctx, uGoogle)
 	if err != nil || g.Provider != auth.ProviderGoogle || g.Role != auth.RoleUser || g.Status != auth.StatusActive ||
@@ -412,6 +432,13 @@ func TestImport(t *testing.T) {
 	b, err := js.Get(ctx, jFailed)
 	if err != nil || b.Status != jobs.StatusFailed || b.Error == nil || *b.Error != "demucs crashed" || b.StageProgress != 30 {
 		t.Fatalf("failed job: %+v %v", b, err)
+	}
+	bdir, _ := layout.JobDir(jFailed)
+	if _, err := os.Stat(filepath.Join(bdir, "source.wav")); err != nil {
+		t.Fatalf("bogus source still copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bdir, "peaks", "source.pk")); err == nil {
+		t.Fatal("bogus wav must not produce source.pk")
 	}
 	if withFlac {
 		fl, err := js.Get(ctx, jFlac)
