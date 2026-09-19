@@ -113,3 +113,7 @@ service-account-key.json
 # Plan files
 *.plan.md
 
+
+# rk rebuild
+!web/dist/
+/data/

@@ -109,6 +109,23 @@ cd frontend && bun run lint && bun run test -- --runInBand
 cd frontend && bun run test:e2e  # opt-in; requires Playwright browser support
 ```
 
+## Rebuild (rk)
+
+A Go rebuild of the backend is in progress: one binary, `rk`, that serves the
+API, an embedded SPA and (later) the worker, with Postgres as the only
+dependency. Phase 2 (skeleton: config, migrations, sessions, jobs + queue +
+SSE, Range-served stems and peaks) lives under `cmd/rk` and `internal/`.
+See [docs/rebuild/README.md](docs/rebuild/README.md) for how to run it.
+
+```bash
+export RK_DATABASE_URL=postgres://rk:rk@127.0.0.1:15432/rk
+go run ./cmd/rk migrate
+go run ./cmd/rk create-admin --email you@example.com --password '...'
+go run ./cmd/rk serve
+```
+
+The legacy stack above keeps working unchanged until the cutover phase.
+
 ---
 
 ## 📁 Project Structure
