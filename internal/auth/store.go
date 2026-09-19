@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -258,9 +259,7 @@ func (s *Store) CreateSession(ctx context.Context, userID, userAgent string) (*S
 	if _, err := rand.Read(id); err != nil {
 		return nil, err
 	}
-	if len(userAgent) > 512 {
-		userAgent = userAgent[:512]
-	}
+	userAgent = clampText(userAgent, 512)
 	sess := &Session{ID: id, UserID: userID, UserAgent: userAgent}
 	err := s.pool.QueryRow(ctx, `INSERT INTO sessions (id, user_id, expires_at, user_agent)
 		VALUES ($1, $2, now() + $3::interval, $4) RETURNING created_at, expires_at`,
@@ -296,6 +295,20 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 	}
 	_, err = s.pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, id)
 	return err
+}
+
+// clampText makes s valid UTF-8 and cuts it to at most maxBytes without
+// splitting a rune, so it can be stored in a Postgres text column.
+func clampText(s string, maxBytes int) string {
+	s = strings.ToValidUTF8(s, "�")
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 func userColumnsPrefixed(alias string) string {

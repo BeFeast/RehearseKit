@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/BeFeast/RehearseKit/internal/api/respond"
 	"github.com/BeFeast/RehearseKit/internal/auth"
@@ -195,9 +196,7 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 			p.ProjectName = "YouTube import"
 		}
 	}
-	if len(p.ProjectName) > 200 {
-		p.ProjectName = p.ProjectName[:200]
-	}
+	p.ProjectName = clampText(p.ProjectName, 200)
 
 	var claimToken string
 	if u := auth.UserFrom(r.Context()); u != nil {
@@ -359,6 +358,20 @@ func (h *Handlers) claim(w http.ResponseWriter, r *http.Request) {
 		}
 		respond.JSON(w, http.StatusOK, j)
 	}
+}
+
+// clampText makes s valid UTF-8 and cuts it to at most maxBytes without
+// splitting a rune, so it can be stored in a Postgres text column.
+func clampText(s string, maxBytes int) string {
+	s = strings.ToValidUTF8(s, "�")
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // newUUID returns a random (version 4) UUID in canonical lowercase form.

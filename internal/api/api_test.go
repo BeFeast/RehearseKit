@@ -480,13 +480,22 @@ func TestJobCreateValidation(t *testing.T) {
 	if j.InputType != "youtube" || j.InputURL == nil || j.ProjectName != "Tube" || j.ClaimToken == "" || j.Quality != "fast" {
 		t.Errorf("youtube job: %+v", j)
 	}
+	// Long multi-byte names are cut on a rune boundary, never mid-rune.
+	cjk := strings.Repeat("音", 80) // 240 bytes
+	resp, body, _ = e.upload(c, 10, map[string]string{"project_name": cjk})
+	if resp.StatusCode != 201 {
+		t.Fatalf("cjk name: %d %s", resp.StatusCode, body)
+	}
+	if got := decodeJob(t, body).ProjectName; got != strings.Repeat("音", 66) {
+		t.Errorf("cjk name truncated to %q (%d bytes)", got, len(got))
+	}
 	resp, body = e.do(c, "POST", "/api/v1/jobs", "not multipart", map[string]string{"Content-Type": "application/json"})
 	if resp.StatusCode != 400 || errCode(body) != "invalid_multipart" {
 		t.Errorf("json body: %d %s", resp.StatusCode, body)
 	}
 	entries, _ := os.ReadDir(filepath.Join(e.dataDir, "jobs"))
-	if len(entries) != 0 {
-		t.Errorf("rejected uploads left %d job dirs behind", len(entries))
+	if len(entries) != 1 { // only the cjk job; every rejected upload was cleaned up
+		t.Errorf("rejected uploads left %d job dirs behind", len(entries)-1)
 	}
 }
 
