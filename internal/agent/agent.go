@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -43,6 +44,10 @@ type Config struct {
 	// URL, which a runner behind an ssh tunnel cannot reach). The signature
 	// covers method, path and expiry only, so rebasing keeps it valid.
 	SignedURLBase string
+	// RebaseSignedURLs rebases the signed URLs onto APIURL (a shorthand for
+	// SignedURLBase = APIURL). Defaults to on when APIURL points at a
+	// loopback address, which is what an ssh tunnel looks like.
+	RebaseSignedURLs bool
 }
 
 // Agent runs the lease loop.
@@ -80,6 +85,8 @@ func New(cfg Config) (*Agent, error) {
 		if u, err := url.Parse(cfg.SignedURLBase); err != nil || u.Scheme == "" || u.Host == "" {
 			return nil, fmt.Errorf("RK_SIGNED_URL_BASE %q must be scheme://host[:port]", cfg.SignedURLBase)
 		}
+	} else if cfg.RebaseSignedURLs || apiIsLoopback(cfg.APIURL) {
+		cfg.SignedURLBase = cfg.APIURL
 	}
 	return &Agent{cfg: cfg, http: &http.Client{}}, nil
 }
@@ -109,6 +116,21 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// apiIsLoopback reports whether the API URL points at this machine
+// (127.0.0.0/8, ::1, localhost) — the shape of an ssh tunnel.
+func apiIsLoopback(api string) bool {
+	u, err := url.Parse(api)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // rebase rewrites the signed URLs of a lease onto cfg.SignedURLBase.

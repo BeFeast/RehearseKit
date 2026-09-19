@@ -225,12 +225,14 @@ func runGPUAgent(args []string) error {
 	once := fs.Bool("once", os.Getenv("RK_ONCE") == "1", "process one job and exit (or RK_ONCE=1)")
 	extra := fs.String("demucs-args", os.Getenv("RK_DEMUCS_ARGS"), "extra demucs arguments, space separated (or RK_DEMUCS_ARGS), e.g. \"--segment 7\"")
 	signedBase := fs.String("signed-url-base", os.Getenv("RK_SIGNED_URL_BASE"), "replace scheme://host of the signed source/upload URLs, e.g. http://127.0.0.1:18080 behind an ssh tunnel (or RK_SIGNED_URL_BASE)")
+	rebase := fs.Bool("rebase-urls", os.Getenv("RK_REBASE_SIGNED_URLS") == "1", "rebase the signed URLs onto --api (or RK_REBASE_SIGNED_URLS=1; default on when --api is a loopback address)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	a, err := agent.New(agent.Config{
 		APIURL: *apiURL, Token: *token, RunnerID: *runnerID, Python: *python, Device: *device,
 		WorkDir: *workDir, Poll: *poll, Once: *once, DemucsExtra: strings.Fields(*extra), SignedURLBase: *signedBase,
+		RebaseSignedURLs: *rebase,
 	})
 	if err != nil {
 		return err

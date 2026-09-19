@@ -216,7 +216,11 @@ Reaching a LAN-only server: `rk serve` behind a LAN proxy is not reachable
 from the rented box, and Cloudflare caps request bodies at 100 MB (stems
 are larger), so the scaler opens a reverse ssh tunnel *from* its host
 *into* the instance — `ssh -N -R 127.0.0.1:18080:<RK_API_URL host>` — and
-the runner is started with `RK_API_URL=http://127.0.0.1:18080`. The
+the runner is started with `RK_API_URL=http://127.0.0.1:18080`. The agent
+rebases the lease's signed source/upload URLs onto that address (the
+server builds them from `RK_PUBLIC_URL`, which the box cannot reach; the
+signature covers method, path and expiry only) — automatic for a loopback
+`RK_API_URL`, or `RK_REBASE_SIGNED_URLS=1` / `RK_SIGNED_URL_BASE`. The
 on-start script waits for `/healthz` through the tunnel before running
 `rk gpu-agent`. The tunnel is a supervised ssh process (direct address
 first, vast's ssh proxy as fallback, backoff on failure, `accept-new`

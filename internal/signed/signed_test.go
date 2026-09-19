@@ -146,6 +146,39 @@ func TestSourceDownload(t *testing.T) {
 	}
 }
 
+// TestSignatureIgnoresHost: the MAC covers method, path and expiry only, so
+// a URL the server built on its public host verifies when the runner
+// rebases it onto an ssh tunnel (any scheme/host, same path and query).
+func TestSignatureIgnoresHost(t *testing.T) {
+	s, layout, ts := newServer(t)
+	dir, _ := layout.JobDir(jobID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "source.wav"), []byte("RIFFdata"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := s.Sign(http.MethodGet, SourcePath(jobID), time.Now().Add(time.Minute))
+	public, err := url.Parse("https://rk.example.com" + u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebased := ts.URL + public.EscapedPath() + "?" + public.RawQuery
+	req, _ := http.NewRequest(http.MethodGet, rebased, nil)
+	req.Host = "something-else.example.net"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("rebased signed URL: %d", resp.StatusCode)
+	}
+	if err := s.Verify(http.MethodGet, public.Path, public.Query()); err != nil {
+		t.Fatalf("verify ignores host: %v", err)
+	}
+}
+
 func TestStemUpload(t *testing.T) {
 	s, layout, ts := newServer(t)
 	body := bytes.Repeat([]byte("stem"), 1000)
