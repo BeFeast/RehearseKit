@@ -13,7 +13,8 @@ go.mod                          module github.com/BeFeast/RehearseKit (Go 1.26)
 cmd/rk/main.go                  serve | migrate | create-admin | worker (stub)
 internal/api/                   server wiring, middleware, error envelope, SPA
 internal/api/respond/           JSON + {"code","message"} helpers
-internal/auth/                  argon2id passwords, cookie sessions, approval, admin
+internal/auth/                  argon2id passwords, cookie sessions, approval, admin, Google sign-in
+internal/auth/googleid/         Google ID-token verification (JWKS cache, RS256), stdlib only
 internal/jobs/                  job model, queue (SKIP LOCKED), events + NOTIFY, SSE
 internal/stems/                 Range-served WAV + peaks (from stemd)
 internal/storage/               on-disk layout under RK_DATA_DIR
@@ -33,7 +34,7 @@ web/                            embedded web/dist (placeholder index.html)
 | `RK_CORS_ORIGINS` | empty (same-origin) | comma-separated origins allowed with credentials; `*` allowed without |
 | `RK_JOB_RETENTION_DAYS` | `7` | retention for signed-in users' jobs (anonymous jobs: 24 h, fixed) |
 | `RK_MAX_UPLOAD_BYTES` | `1073741824` | multipart upload cap |
-| `RK_GOOGLE_CLIENT_ID` | empty | reported by `/api/v1/config` only; Google sign-in comes later |
+| `RK_GOOGLE_CLIENT_ID` | empty | OAuth client id; enables `POST /api/v1/auth/google` and `google_sign_in:true` in `/api/v1/config` |
 | `RK_LOG_LEVEL` | `INFO` | slog level |
 
 ## Run locally
@@ -119,9 +120,63 @@ message from yt-dlp), `504 youtube_timeout`, `501 youtube_unsupported` when
 `"youtube_preview": false` so the SPA can hide the URL input.
 
 Errors are always `{"code":"...","message":"..."}`. Notable codes:
-`pending_approval` (403 on login), `invalid_credentials` (401),
+`pending_approval` (403 on login), `account_inactive` (403), `invalid_credentials` (401),
 `claim_token_required` (403), `expired` (410 for an anonymous link past
 `expires_at`), `too_large` (413), `already_finished` (409 on cancel).
+
+## Auth
+
+Two ways in, one session model. Both end in the `rk_session` cookie
+(HttpOnly, SameSite=Lax, Secure behind https, 30 days) issued only to
+`active` accounts.
+
+**Email + password.** `POST /auth/register` creates a `pending` account;
+an admin approves it (`POST /admin/users/{id}/approve`); `POST /auth/login`
+then issues the session. `rk create-admin` bootstraps the first admin.
+
+**Google.** The SPA loads Google Identity Services with the
+`google_client_id` from `/api/v1/config`, gets an ID token from the GIS
+callback and posts it as-is:
+
+```bash
+curl -s -c cj -H 'Content-Type: application/json' \
+  -d '{"credential":"<google id_token>"}' $B/api/v1/auth/google
+```
+
+The server verifies the token itself (`internal/auth/googleid`, no
+third-party dependency): RS256 signature against Google's JWKS
+(`https://www.googleapis.com/oauth2/v3/certs`, cached for the
+`Cache-Control: max-age` Google sends, refetched when a token names an
+unknown `kid`, at most once a minute), `iss` in
+`{accounts.google.com, https://accounts.google.com}`, `aud` equal to
+`RK_GOOGLE_CLIENT_ID`, `exp`/`iat` with 60 s skew, and `email_verified`.
+
+Then the account is resolved, in this order:
+
+1. by the stored Google `sub` (`users.google_sub`, migration `0002`), so a
+   Google-side email change still lands on the same rk account;
+2. by email (citext, case-insensitive) — an existing password account is
+   *linked*: `google_sub` and `avatar_url` are recorded, an empty `name` is
+   filled in, and `provider`/`password_hash` are left alone, so password
+   login keeps working;
+3. otherwise a new user is created with `provider=google`, `role=user`,
+   `status=pending` — the same policy as `/auth/register`; there is no
+   domain allow-list or admin-email auto-promotion (the admin is created
+   with `rk create-admin`, and signing in with Google on that email links
+   to the existing admin row).
+
+Responses:
+
+| Status | Code | When |
+|---|---|---|
+| 200 + cookie | — | account is `active`; body is the user |
+| 403 | `pending_approval` | account is `pending`; body also carries `"user": {...}` so the SPA can render `/pending-approval` without a session |
+| 403 | `account_inactive` | account was deactivated by an admin |
+| 403 | `email_not_verified` | Google says the address is not verified |
+| 401 | `invalid_google_token` | signature, issuer, audience, expiry or shape failed (the reason is logged at debug, not returned) |
+| 503 | `google_unavailable` | JWKS could not be fetched and nothing is cached |
+| 501 | `google_not_configured` | `RK_GOOGLE_CLIENT_ID` is empty |
+| 400 | `invalid_json` | body is not `{"credential": "..."}` |
 
 ## Tests
 
@@ -144,7 +199,6 @@ stages: shift 6, 9, 12, 15. See `internal/pipeline/peaks`.
 
 ## Not in this phase
 
-Google OIDC (`POST /api/v1/auth/google` answers 501), `rk worker`
-(exits "not implemented"), the SPA, `/jobs/{id}/reprocess`,
+`rk worker` (exits "not implemented"), the SPA, `/jobs/{id}/reprocess`,
 `/jobs/{id}/download`, `/jobs/{id}/mix`, `/profile`, the GPU-runner endpoints,
 retention cleanup and `import-legacy`.
