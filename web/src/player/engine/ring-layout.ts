@@ -1,0 +1,95 @@
+/**
+ * Shared memory layout for the streaming player.
+ *
+ * One SharedArrayBuffer holds a control block (Int32), a meter block
+ * (Float32, written by the audio thread) and planar Float32 ring buffers, one
+ * per channel per stem. The layout object is the single source of truth: the
+ * main thread and the AudioWorklet processor both derive their typed-array
+ * views from it (the worklet receives it through `processorOptions`), so
+ * nothing about the byte layout is hardcoded twice.
+ *
+ * Ownership of control words:
+ *   main thread  -> STATE, EOF_POS, WRITE_POS[i]
+ *   audio thread -> READ_POS, UNDERRUNS, ENDED, QUANTA, meter block
+ *
+ * READ_POS / WRITE_POS are absolute frame counters since the last flush (not
+ * ring indices); the ring index is `pos & mask`. Buffered frames for stem i are
+ * `(WRITE_POS[i] - READ_POS) | 0`.
+ *
+ * The meter block holds METER_FLOATS floats per stem, computed by the worklet
+ * from the raw (pre-fader) stem signal:
+ *   [0] level — peak follower with a −20 dB/s release
+ *   [1] rms   — RMS follower with the same release
+ *   [2] hold  — peak hold, kept for METER_HOLD_SECONDS then released
+ */
+
+export const CTRL = {
+  STATE: 0,
+  READ_POS: 1,
+  UNDERRUNS: 2,
+  EOF_POS: 3,
+  ENDED: 4,
+  QUANTA: 5,
+  WRITE_POS0: 8,
+} as const;
+
+export const STATE = {
+  STOPPED: 0,
+  PRIMING: 1,
+  PLAYING: 2,
+} as const;
+
+export const CTRL_INT32S = 16;
+export const CTRL_BYTES = CTRL_INT32S * 4;
+export const MAX_STEMS = CTRL_INT32S - CTRL.WRITE_POS0;
+export const MAX_CHANNELS = 2;
+
+export const METER = { LEVEL: 0, RMS: 1, HOLD: 2 } as const;
+export const METER_FLOATS = 3;
+export const METER_BYTES = MAX_STEMS * METER_FLOATS * 4;
+/** Meter release rate in dB per second. */
+export const METER_RELEASE_DB_PER_S = 20;
+/** How long a peak is held before it starts releasing. */
+export const METER_HOLD_SECONDS = 1.5;
+
+export interface StemLayout {
+  channels: number;
+  /** Byte offset inside the SharedArrayBuffer of each channel's Float32 ring. */
+  channelByteOffsets: number[];
+}
+
+export interface RingLayout {
+  ringFrames: number;
+  mask: number;
+  ctrlByteOffset: 0;
+  meterByteOffset: number;
+  stems: StemLayout[];
+  totalBytes: number;
+}
+
+export function isPowerOfTwo(n: number): boolean {
+  return Number.isInteger(n) && n > 0 && (n & (n - 1)) === 0;
+}
+
+export function createRingLayout(stemChannels: number[], ringFrames: number): RingLayout {
+  if (!isPowerOfTwo(ringFrames)) {
+    throw new Error(`ringFrames must be a power of two, got ${ringFrames}`);
+  }
+  if (stemChannels.length === 0 || stemChannels.length > MAX_STEMS) {
+    throw new Error(`stem count must be 1..${MAX_STEMS}, got ${stemChannels.length}`);
+  }
+  const meterByteOffset = CTRL_BYTES;
+  let offset = CTRL_BYTES + METER_BYTES;
+  const stems: StemLayout[] = stemChannels.map((channels) => {
+    if (!Number.isInteger(channels) || channels < 1 || channels > MAX_CHANNELS) {
+      throw new Error(`channels must be 1..${MAX_CHANNELS}, got ${channels}`);
+    }
+    const channelByteOffsets: number[] = [];
+    for (let c = 0; c < channels; c++) {
+      channelByteOffsets.push(offset);
+      offset += ringFrames * 4;
+    }
+    return { channels, channelByteOffsets };
+  });
+  return { ringFrames, mask: ringFrames - 1, ctrlByteOffset: 0, meterByteOffset, stems, totalBytes: offset };
+}

@@ -4,6 +4,7 @@
 //	rk migrate        apply embedded schema migrations
 //	rk create-admin   create or reset a password admin account
 //	rk import-legacy  copy users/jobs/stems from the FastAPI deployment
+//	rk peaks          write peaks/<stem>.pk for a job's stems (dev helper)
 //	rk worker         run the CPU pipeline worker and sweepers
 //	rk gpu-agent      run the GPU runner loop (on the GPU box)
 package main
@@ -17,6 +18,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +29,7 @@ import (
 	"github.com/BeFeast/RehearseKit/internal/config"
 	"github.com/BeFeast/RehearseKit/internal/db"
 	"github.com/BeFeast/RehearseKit/internal/legacy"
+	"github.com/BeFeast/RehearseKit/internal/pipeline/peaks"
 	"github.com/BeFeast/RehearseKit/internal/storage"
 	"github.com/BeFeast/RehearseKit/internal/worker"
 )
@@ -47,6 +50,8 @@ func main() {
 		err = runCreateAdmin(os.Args[2:])
 	case "import-legacy":
 		err = runImportLegacy(os.Args[2:])
+	case "peaks":
+		err = runPeaks(os.Args[2:])
 	case "worker":
 		err = runWorker(os.Args[2:])
 	case "gpu-agent":
@@ -74,6 +79,7 @@ commands:
   create-admin   --email <e> --password <p>  create or reset an admin (RK_DATABASE_URL)
   import-legacy  --legacy-db <dsn> --legacy-dir <path> [--dry-run] [--copy|--hardlink]
                  [--retention-days N]  import the FastAPI deployment (RK_DATABASE_URL, RK_DATA_DIR)
+  peaks          <job-id>  build jobs/<id>/peaks/*.pk from jobs/<id>/stems/*.wav (RK_DATA_DIR)
   worker         run the CPU pipeline worker (RK_DATABASE_URL, RK_DATA_DIR, RK_PYTHON, RK_LOCAL_DEMUCS)
   gpu-agent      run the GPU runner (RK_API_URL, RK_RUNNER_TOKEN, RK_RUNNER_ID; --once, --poll, --device)`)
 }
@@ -304,6 +310,74 @@ func runImportLegacy(args []string) error {
 	}
 	if sum.Jobs.Errors > 0 {
 		return fmt.Errorf("%d job(s) failed to import", sum.Jobs.Errors)
+	}
+	return nil
+}
+
+func runPeaks(args []string) error {
+	fs := flag.NewFlagSet("peaks", flag.ExitOnError)
+	dataDir := fs.String("data-dir", envOr("RK_DATA_DIR", "./data"), "storage root (or RK_DATA_DIR)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: rk peaks [--data-dir <dir>] <job-id>")
+	}
+	id := fs.Arg(0)
+	layout, err := storage.New(*dataDir)
+	if err != nil {
+		return err
+	}
+	dir, err := layout.JobDir(id)
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "stems"))
+	if err != nil {
+		return err
+	}
+	var n int
+	for _, e := range entries {
+		name := strings.TrimSuffix(e.Name(), ".wav")
+		if e.IsDir() || name == e.Name() {
+			continue
+		}
+		src, err := layout.StemPath(id, name)
+		if err != nil {
+			return err
+		}
+		dst, err := layout.PeaksPath(id, name)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		f, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		pk, err := peaks.Build(f, nil)
+		_ = f.Close()
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		out, err := os.Create(dst)
+		if err != nil {
+			return err
+		}
+		if err := peaks.Write(out, pk); err != nil {
+			_ = out.Close()
+			return err
+		}
+		if err := out.Close(); err != nil {
+			return err
+		}
+		slog.Info("peaks written", "stem", name, "frames", pk.Frames, "sample_rate", pk.SampleRate, "channels", pk.Channels, "path", dst)
+		n++
+	}
+	if n == 0 {
+		return errors.New("no stems/*.wav found")
 	}
 	return nil
 }

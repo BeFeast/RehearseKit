@@ -17,6 +17,7 @@ eggs/
 lib/
 lib64/
 !frontend/lib/
+!web/src/lib/
 parts/
 sdist/
 var/
@@ -116,4 +117,9 @@ service-account-key.json
 
 # rk rebuild
 !web/dist/
+web/dist/*
+!web/dist/.gitkeep
+!web/dist/placeholder.html
+web/node_modules/
+web/tsconfig.tsbuildinfo
 /data/
