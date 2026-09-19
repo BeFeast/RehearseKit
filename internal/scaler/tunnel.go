@@ -219,8 +219,9 @@ func (t *SSHTunnel) verify(ctx context.Context, bin string, ep Endpoint) {
 			if t.st.Running && t.st.Endpoint == ep {
 				t.st.Verified = true
 			}
+			upSince := t.st.UpSince
 			t.mu.Unlock()
-			t.log().Info("tunnel: verified from the instance", "endpoint", ep.String(), "after", time.Since(t.st.UpSince).Round(time.Second))
+			t.log().Info("tunnel: verified from the instance", "endpoint", ep.String(), "after", time.Since(upSince).Round(time.Second))
 			return
 		}
 	}
