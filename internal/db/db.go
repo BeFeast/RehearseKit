@@ -23,10 +23,26 @@ const migrationLockID int64 = 0x524b4d4947 // "RKMIG"
 
 // Connect opens a pgx pool for the given DSN and verifies connectivity.
 func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	return ConnectMinConns(ctx, dsn, 0)
+}
+
+// ConnectMinConns is Connect with the pool's max size raised to at least
+// minMax when the DSN (pool_max_conns) or the pgx default (max(4, NumCPU))
+// would give fewer. Callers that reserve connections for the duration of
+// a job (the worker's per-job locks) use it to keep headroom for the
+// ordinary queries those jobs make.
+func ConnectMinConns(ctx context.Context, dsn string, minMax int32) (*pgxpool.Pool, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("database URL is empty (set RK_DATABASE_URL)")
 	}
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+	if cfg.MaxConns < minMax {
+		cfg.MaxConns = minMax
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}

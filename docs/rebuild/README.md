@@ -116,7 +116,10 @@ One process, two loops, both polling every `-poll` (2 s):
 "Nobody is processing" is a per-job Postgres advisory lock
 (`jobs.TryLock`, session-level on a reserved pool connection), so
 goroutines in one process or several `rk worker` processes on one database
-never double-run a job, and a crashed worker leaves nothing locked.
+never double-run a job, and a crashed worker leaves nothing locked. Each
+held lock pins one pool connection, so `rk worker` opens its pool with at
+least `slots + 1 + 4` connections (`worker.PoolConns`; a `pool_max_conns`
+in the DSN only raises that) and warns when handed a smaller pool.
 Adoption is therefore continuous, not a start-up step: a job re-queued by
 hand (`UPDATE jobs SET status = 'finalizing' …`, or back to `separating`
 for runners to pick up again) is acted on within one poll interval.

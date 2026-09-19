@@ -209,7 +209,7 @@ func runWorker(args []string) error {
 	}
 	ctx, cancel := signalContext()
 	defer cancel()
-	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	pool, err := db.ConnectMinConns(ctx, cfg.DatabaseURL, worker.PoolConns(cfg.WorkerSlots))
 	if err != nil {
 		return err
 	}

@@ -50,6 +50,21 @@ const (
 // resumeBatch bounds how many resumable candidates one poll tries to lock.
 const resumeBatch = 16
 
+// lockHeadroom is how many pool connections must stay free for the
+// ordinary queries (transitions, cancel watchers, sweepers) while every
+// slot and the resume loop each hold a lock connection.
+const lockHeadroom = 4
+
+// PoolConns is the pool size a worker with slots CPU pipelines needs: one
+// reserved lock connection per slot, one for the resume loop, plus
+// headroom. cmd/rk sizes the pool with it; New warns on a smaller pool.
+func PoolConns(slots int) int32 {
+	if slots < 1 {
+		slots = 1
+	}
+	return int32(slots) + 1 + lockHeadroom
+}
+
 // Worker processes jobs.
 type Worker struct {
 	cfg    config.Config
@@ -75,6 +90,10 @@ func New(cfg config.Config, pool *pgxpool.Pool, layout storage.Layout) *Worker {
 	slots := cfg.WorkerSlots
 	if slots < 1 {
 		slots = 1
+	}
+	if want, have := PoolConns(slots), pool.Config().MaxConns; have < want {
+		slog.Warn("worker: database pool is small for the slot count; job locks each hold a connection",
+			"pool_max_conns", have, "recommended", want, "slots", slots)
 	}
 	return &Worker{
 		cfg: cfg, pool: pool, store: jobs.NewStore(pool), gpu: gpu.NewStore(pool, cfg.LeaseTTL), layout: layout,
