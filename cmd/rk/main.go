@@ -188,13 +188,20 @@ func runCreateAdmin(args []string) error {
 func runWorker(args []string) error {
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
 	poll := fs.Duration("poll", 2*time.Second, "queue polling / cancellation check interval")
-	adopt := fs.Bool("adopt", true, "resume jobs left in separating/finalizing/packaging by a previous worker")
+	adopt := fs.Bool("adopt", true, "deprecated, ignored: orphaned jobs are adopted continuously (per-job advisory lock makes several workers safe)")
+	slots := fs.Int("slots", 0, "concurrent CPU pipelines (or RK_WORKER_SLOTS; default 2)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	cfg, err := config.FromEnv()
 	if err != nil {
 		return err
+	}
+	if *slots > 0 {
+		cfg.WorkerSlots = *slots
+	}
+	if !*adopt {
+		slog.Warn("--adopt=false is ignored: orphaned jobs are adopted continuously under a per-job lock")
 	}
 	layout, err := storage.New(cfg.DataDir)
 	if err != nil {
@@ -209,7 +216,6 @@ func runWorker(args []string) error {
 	defer pool.Close()
 	w := worker.New(cfg, pool, layout)
 	w.Poll = *poll
-	w.Adopt = *adopt
 	return w.Run(ctx)
 }
 

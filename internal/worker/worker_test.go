@@ -224,10 +224,16 @@ func TestPipelineEndToEnd(t *testing.T) {
 		t.Fatalf("audio info %+v", mid)
 	}
 
-	e.fakeRunner(j.ID)
-
+	// The intake path returns as soon as the job is handed to the GPU queue.
 	if err := <-done; err != nil {
 		t.Fatalf("RunOnce: %v", err)
+	}
+	e.fakeRunner(j.ID)
+	e.waitStatus(j.ID, jobs.StatusFinalizing, 5*time.Second)
+
+	// The resume path picks the finished job up and finishes it.
+	if ran, err := e.w.ResumeOnce(ctx); err != nil || !ran {
+		t.Fatalf("ResumeOnce = %v, %v; want true, nil", ran, err)
 	}
 	final := e.waitStatus(j.ID, jobs.StatusCompleted, 10*time.Second)
 	if final.StageProgress != 100 || final.CompletedAt == nil {
@@ -394,14 +400,313 @@ func TestResumeFromFinalizing(t *testing.T) {
 }
 
 func TestGPUWaitTimeout(t *testing.T) {
-	e := newEnv(t, func(c *config.Config) { c.GPUWaitTimeout = 500 * time.Millisecond })
+	e := newEnv(t, func(c *config.Config) { c.GPUWaitTimeout = 300 * time.Millisecond })
+	ctx := context.Background()
 	j := e.upload(1, "wav", 1, jobs.QualityFast)
-	if _, err := e.w.RunOnce(context.Background()); err != nil {
+	if _, err := e.w.RunOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	final, _ := e.store.Get(context.Background(), j.ID)
+	e.waitStatus(j.ID, jobs.StatusSeparating, 5*time.Second)
+	// First sweep starts the clock; nothing fails yet.
+	if ids, err := e.w.SweepGPUWait(ctx); err != nil || len(ids) != 0 {
+		t.Fatalf("first sweep: %v %v", ids, err)
+	}
+	time.Sleep(400 * time.Millisecond)
+	ids, err := e.w.SweepGPUWait(ctx)
+	if err != nil || len(ids) != 1 || ids[0] != j.ID {
+		t.Fatalf("second sweep: %v %v", ids, err)
+	}
+	final, _ := e.store.Get(ctx, j.ID)
 	if final.Status != jobs.StatusFailed || !strings.Contains(deref(final.Error), "no GPU runner") {
 		t.Fatalf("%s %v", final.Status, deref(final.Error))
+	}
+}
+
+// TestGPUWaitClockResetsOnLease: a runner holding (then dropping) a lease
+// restarts the wait, so a job that had a failed attempt is not failed early.
+func TestGPUWaitClockResetsOnLease(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.GPUWaitTimeout = 300 * time.Millisecond })
+	ctx := context.Background()
+	j := e.upload(1, "wav", 1, jobs.QualityFast)
+	if _, err := e.w.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.w.SweepGPUWait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	l, _, err := e.gpu.Claim(ctx, "fake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := e.w.SweepGPUWait(ctx); len(ids) != 0 {
+		t.Fatalf("failed a leased job: %v", ids)
+	}
+	if _, err := e.gpu.Fail(ctx, l.ID, "fake", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if ids, _ := e.w.SweepGPUWait(ctx); len(ids) != 0 {
+		t.Fatalf("failed a job whose clock should have restarted: %v", ids)
+	}
+	if st, _ := e.store.Status(ctx, j.ID); st != jobs.StatusSeparating {
+		t.Fatalf("status %s", st)
+	}
+}
+
+// runWorker starts w.Run in the background and stops it when the test ends.
+func (e *env) runWorker(ctx context.Context) (stop func()) {
+	e.t.Helper()
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		_ = e.w.Run(ctx)
+		close(done)
+	}()
+	return func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			e.t.Error("worker.Run did not return after cancel")
+		}
+	}
+}
+
+// fakeRunnerAny leases whichever job is offered next and completes it.
+func (e *env) fakeRunnerAny() string {
+	e.t.Helper()
+	ctx := context.Background()
+	l, j, err := e.gpu.Claim(ctx, "fake")
+	if err != nil {
+		e.t.Fatalf("fake runner claim: %v", err)
+	}
+	e.deliverStems(j.ID)
+	_, stems := jobs.ModelFor(j.Quality)
+	var reports []gpu.StemReport
+	for _, name := range stems {
+		st, _ := os.Stat(mustStemPath(e, j.ID, name))
+		reports = append(reports, gpu.StemReport{Name: name, Bytes: st.Size()})
+	}
+	if err := e.gpu.Complete(ctx, l.ID, "fake", reports, nil); err != nil {
+		e.t.Fatalf("fake runner complete: %v", err)
+	}
+	return j.ID
+}
+
+// deliverStems copies source.wav into each stem file the job expects.
+func (e *env) deliverStems(jobID string) {
+	e.t.Helper()
+	j, err := e.store.Get(context.Background(), jobID)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	dir, _ := e.layout.JobDir(jobID)
+	_, stems := jobs.ModelFor(j.Quality)
+	for _, name := range stems {
+		dst := mustStemPath(e, jobID, name)
+		_ = os.MkdirAll(filepath.Dir(dst), 0o755)
+		if err := media.CopyFile(filepath.Join(dir, "source.wav"), dst); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+}
+
+// stageAtFinalizing fakes a job that was converted, analysed and separated
+// elsewhere and sits at status (finalizing by default) with stems on disk,
+// the way a runner's Complete leaves it.
+func (e *env) stageAtFinalizing(j *jobs.Job) {
+	e.t.Helper()
+	ctx := context.Background()
+	dir, _ := e.layout.JobDir(j.ID)
+	if err := media.ConvertToStemWAV(ctx, filepath.Join(dir, "source.wav"), filepath.Join(dir, "source.wav")); err != nil {
+		e.t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(dir, "tempo.json"), []byte(`{"bpm": 120, "confidence": 0.9}`), 0o644)
+	e.deliverStems(j.ID)
+	for _, st := range []string{jobs.StatusConverting, jobs.StatusAnalyzing, jobs.StatusSeparating, jobs.StatusFinalizing} {
+		if err := jobs.Transition(ctx, e.pool, j.ID, st, jobs.StageStart(st), st); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+}
+
+// TestSlotsDoNotWaitForGPU: with two slots, two pending jobs run their CPU
+// stages concurrently and both reach `separating` while no runner exists;
+// the slots are free again (a third job starts) before any runner shows up.
+func TestSlotsDoNotWaitForGPU(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("RK_STUB_TRACE", trace)
+	e := newEnv(t, func(c *config.Config) {
+		c.WorkerSlots = 2
+		c.TempoCmd = tempoStub(t, `{"bpm": 100, "confidence": 1}`, 2*time.Second)
+	})
+	ctx := context.Background()
+	a := e.upload(1, "wav", 1, jobs.QualityFast)
+	b := e.upload(2, "wav", 1, jobs.QualityFast)
+	c := e.upload(3, "wav", 1, jobs.QualityFast)
+	stop := e.runWorker(ctx)
+	defer stop()
+
+	for _, j := range []*jobs.Job{a, b, c} {
+		e.waitStatus(j.ID, jobs.StatusSeparating, 30*time.Second)
+	}
+	// The tempo stub ran for a and b at the same time: the second start
+	// precedes the first end.
+	starts, ends := stubTimes(t, trace)
+	if len(starts) != 3 || len(ends) != 3 {
+		t.Fatalf("trace: %d starts, %d ends", len(starts), len(ends))
+	}
+	if !(starts[1] < ends[0]) {
+		t.Fatalf("second analysis (%.2f) started only after the first ended (%.2f): slots ran sequentially", starts[1], ends[0])
+	}
+	if st, err := e.gpu.QueueStats(ctx); err != nil || st.Waiting != 3 {
+		t.Fatalf("queue %+v %v", st, err)
+	}
+
+	// Runners complete the jobs; the resume loop finishes each one.
+	var done []string
+	for i := 0; i < 3; i++ {
+		done = append(done, e.fakeRunnerAny())
+	}
+	for _, id := range done {
+		e.waitStatus(id, jobs.StatusCompleted, 30*time.Second)
+	}
+}
+
+func stubTimes(t *testing.T, trace string) (starts, ends []float64) {
+	t.Helper()
+	b, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 3 {
+			continue
+		}
+		var ts float64
+		fmt.Sscanf(f[2], "%f", &ts)
+		switch f[1] {
+		case "start":
+			starts = append(starts, ts)
+		case "end":
+			ends = append(ends, ts)
+		}
+	}
+	return starts, ends
+}
+
+// TestResumeClaimsFinalizing: a job a runner completed is claimed by
+// ResumeOnce (not by intake) and taken to completed; a second call finds
+// nothing.
+func TestResumeClaimsFinalizing(t *testing.T) {
+	e := newEnv(t, nil)
+	ctx := context.Background()
+	j := e.upload(1, "wav", 1, jobs.QualityFast)
+	e.stageAtFinalizing(j)
+	if ran, err := e.w.RunOnce(ctx); err != nil || ran {
+		t.Fatalf("intake took a finalizing job: %v %v", ran, err)
+	}
+	if ran, err := e.w.ResumeOnce(ctx); err != nil || !ran {
+		t.Fatalf("ResumeOnce = %v, %v", ran, err)
+	}
+	final, _ := e.store.Get(ctx, j.ID)
+	if final.Status != jobs.StatusCompleted || len(final.Stems) != 4 {
+		t.Fatalf("status %s error %v stems %d", final.Status, deref(final.Error), len(final.Stems))
+	}
+	if ran, err := e.w.ResumeOnce(ctx); err != nil || ran {
+		t.Fatalf("second ResumeOnce = %v, %v; want false", ran, err)
+	}
+}
+
+// TestRequeuedJobAdoptedNextPoll: while the worker runs, an operator sets a
+// job's status back by hand in SQL (no event, no lease, no goroutine). A
+// job put in finalizing is finished within a poll; a job put back in
+// separating is offered to runners again and finished after a runner
+// completes it. No restart involved.
+func TestRequeuedJobAdoptedNextPoll(t *testing.T) {
+	e := newEnv(t, nil)
+	ctx := context.Background()
+	a := e.upload(1, "wav", 1, jobs.QualityFast)
+	b := e.upload(2, "wav", 1, jobs.QualityFast)
+	for _, j := range []*jobs.Job{a, b} {
+		e.stageAtFinalizing(j)
+		if err := jobs.Transition(ctx, e.pool, j.ID, jobs.StatusFailed, 0, "GPU blew up"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stop := e.runWorker(ctx)
+	defer stop()
+	time.Sleep(3 * e.w.Poll) // the worker is idle and polling
+
+	if _, err := e.pool.Exec(ctx, `UPDATE jobs SET status = 'finalizing', error = NULL, completed_at = NULL WHERE id = $1`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	e.waitStatus(a.ID, jobs.StatusCompleted, 10*e.w.Poll+5*time.Second)
+
+	if _, err := e.pool.Exec(ctx, `UPDATE jobs SET status = 'separating', error = NULL, completed_at = NULL WHERE id = $1`, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * e.w.Poll)
+	if st, _ := e.store.Status(ctx, b.ID); st != jobs.StatusSeparating {
+		t.Fatalf("re-queued separating job was touched by the worker: %s", st)
+	}
+	if got := e.fakeRunnerAny(); got != b.ID {
+		t.Fatalf("runner got %s, want %s", got, b.ID)
+	}
+	e.waitStatus(b.ID, jobs.StatusCompleted, 10*e.w.Poll+5*time.Second)
+}
+
+// TestNoDoubleRun: concurrent resume attempts on one job run it once; a
+// job locked by another holder is skipped.
+func TestNoDoubleRun(t *testing.T) {
+	e := newEnv(t, nil)
+	ctx := context.Background()
+	j := e.upload(1, "wav", 1, jobs.QualityFast)
+	e.stageAtFinalizing(j)
+
+	unlock, ok, err := e.store.TryLock(ctx, j.ID)
+	if err != nil || !ok {
+		t.Fatalf("TryLock %v %v", ok, err)
+	}
+	if ran, err := e.w.ResumeOnce(ctx); err != nil || ran {
+		t.Fatalf("ResumeOnce ran a locked job: %v %v", ran, err)
+	}
+	unlock()
+
+	const n = 4
+	results := make(chan bool, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			ran, err := e.w.ResumeOnce(ctx)
+			if err != nil {
+				t.Error(err)
+			}
+			results <- ran
+		}()
+	}
+	runs := 0
+	for i := 0; i < n; i++ {
+		if <-results {
+			runs++
+		}
+	}
+	if runs != 1 {
+		t.Fatalf("%d concurrent ResumeOnce calls ran the job, want 1", runs)
+	}
+	evs, _ := e.store.Events(ctx, j.ID, 0)
+	var packaging, completed int
+	for _, ev := range evs {
+		switch ev.Status {
+		case jobs.StatusPackaging:
+			packaging++
+		case jobs.StatusCompleted:
+			completed++
+		}
+	}
+	if packaging != 1 || completed != 1 {
+		t.Fatalf("packaging events %d, completed events %d; want 1 and 1", packaging, completed)
 	}
 }
 

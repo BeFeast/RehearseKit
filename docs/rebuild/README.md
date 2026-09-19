@@ -22,7 +22,7 @@ internal/storage/               on-disk layout under RK_DATA_DIR
 internal/db/                    pgx pool, embedded migrations, dbtest helper
 internal/signed/                HMAC signed URLs; GET source / PUT stem endpoints
 internal/gpu/                   GPU lease API (claim, heartbeat, complete, fail, expiry, queue stats)
-internal/worker/                rk worker: CPU stages, GPU wait, sweepers
+internal/worker/                rk worker: intake (CPU stages → GPU hand-off) and resume loops, sweepers
 internal/agent/                 rk gpu-agent: lease → demucs → upload loop
 internal/scaler/                rk gpu-scaler: vast.ai rent/destroy policy, ssh reverse tunnel, state file
 internal/pipeline/peaks/        .pk writer/reader (min/max mip pyramid)
@@ -62,7 +62,8 @@ web/                            the SPA (Vite + React); web/dist is embedded, se
 | `RK_TEMPO_CMD` | empty | replaces the analyser command entirely (tests) |
 | `RK_LOCAL_DEMUCS` | unset | `1` makes the worker run `python -m demucs` itself (dev; no GPU runner needed) |
 | `RK_DEMUCS_DEVICE` | `cpu` (worker) / `cuda` (agent) | demucs `-d` |
-| `RK_GPU_WAIT_TIMEOUT` | `3h` | a job waiting in `separating` with no runner ever leasing it fails after this |
+| `RK_GPU_WAIT_TIMEOUT` | `3h` | a job waiting in `separating` with no runner ever leasing it fails after this (counted by the worker from when it first saw the job unleased; a lease restarts the clock) |
+| `RK_WORKER_SLOTS` | `2` | jobs the worker runs through the CPU stages (converting, analyzing) at once; also `rk worker -slots N` |
 | `RK_SCALER_*` | see [GPU autoscaler](#gpu-autoscaler-rk-gpu-scaler) | `rk gpu-scaler` policy, image, tunnel and state (runs on the vast.ai-facing host, not the server) |
 
 ## Run locally
@@ -99,10 +100,30 @@ RK_LOCAL_DEMUCS=1 RK_PYTHON=$PWD/.venv/bin/python go run ./cmd/rk worker
 
 ## Pipeline (`rk worker`)
 
-One process, one job at a time. `jobs.Claim` takes the oldest `pending`
-job; each stage owns a band of the 0–100 progress and emits `job_events`
-with the legacy caption strings (`jobs.StatusMessage`, verbatim from the
-old `job-card.tsx`) so the SPA can keep its copy.
+One process, two loops, both polling every `-poll` (2 s):
+
+- **intake** — `jobs.Claim` takes the oldest `pending` job into a free
+  slot (`RK_WORKER_SLOTS`, default 2) and runs converting → analyzing in a
+  goroutine. The slot is released the moment the job is in `separating`:
+  nothing in the worker waits for a GPU runner, so the next pending job
+  starts its CPU stages while earlier ones queue for a GPU.
+- **resume** — one job at a time, takes any job past the GPU hand-off that
+  nobody is processing (`finalizing` after a runner's `complete`, or
+  `finalizing`/`packaging` left by a dead worker) and runs finalizing →
+  packaging → completed. With `RK_LOCAL_DEMUCS=1` it also takes
+  lease-less `separating` jobs and runs demucs itself (sequentially).
+
+"Nobody is processing" is a per-job Postgres advisory lock
+(`jobs.TryLock`, session-level on a reserved pool connection), so
+goroutines in one process or several `rk worker` processes on one database
+never double-run a job, and a crashed worker leaves nothing locked.
+Adoption is therefore continuous, not a start-up step: a job re-queued by
+hand (`UPDATE jobs SET status = 'finalizing' …`, or back to `separating`
+for runners to pick up again) is acted on within one poll interval.
+
+Each stage owns a band of the 0–100 progress and emits `job_events` with
+the legacy caption strings (`jobs.StatusMessage`, verbatim from the old
+`job-card.tsx`) so the SPA can keep its copy.
 
 | Stage | Progress | Work | Output under `jobs/<id>/` |
 |---|---|---|---|
@@ -139,11 +160,15 @@ to regenerate).
 
 Sweepers (in the worker process): expired GPU leases every 30 s, jobs stuck
 in a CPU stage with no event for 45 min every 5 min (→ failed), retention
-(`DELETE … WHERE expires_at < now()` + directory removal) every 10 min.
-On start the worker adopts jobs left in `separating`/`finalizing`/
-`packaging` by a previous process (`--adopt=false` to disable when running
-several workers); on SIGTERM a job still in converting/analyzing goes back
-to `pending`.
+(`DELETE … WHERE expires_at < now()` + directory removal) every 10 min,
+and the GPU-wait watchdog every poll: a job in `separating` that no runner
+has leased for `RK_GPU_WAIT_TIMEOUT` fails (`Stem separation failed: no
+GPU runner picked up the job within 3h0m0s`). The watchdog's clock is
+in-process (starts when this worker first sees the job unleased, restarts
+after any lease), so a worker restart or a hand re-queue grants a fresh
+timeout. On SIGTERM a job still in converting/analyzing goes back to
+`pending`; jobs in `finalizing`/`packaging` are resumed by the next
+process. `--adopt` is accepted for compatibility and ignored.
 
 ## GPU runners (`rk gpu-agent`)
 
@@ -385,10 +410,13 @@ RK_TEST_DATABASE_URL=postgres://rk:rk@127.0.0.1:15432/rk go test ./...
 Database-backed tests skip when `RK_TEST_DATABASE_URL` is unset. Each test
 gets its own schema (`rk_test_<hex>`) with `search_path` pointed at it, so
 packages run in parallel against one database and clean up after themselves.
-The worker integration test (`internal/worker`) needs ffmpeg/ffprobe on
-PATH (skips otherwise), uses a stub tempo command and a fake in-process GPU
-runner, and exercises upload → convert → analyse → lease → finalise →
-package on a synthetic WAV.
+The worker integration tests (`internal/worker`) need ffmpeg/ffprobe on
+PATH (skip otherwise), use a stub tempo command and a fake in-process GPU
+runner, and exercise upload → convert → analyse → lease → finalise →
+package on a synthetic WAV, two slots analysing at the same time while no
+runner exists, the resume loop claiming a runner-completed job, hand
+re-queued jobs being adopted while the worker runs, and concurrent resume
+attempts running a job exactly once.
 
 ## Peaks file (`.pk`)
 
