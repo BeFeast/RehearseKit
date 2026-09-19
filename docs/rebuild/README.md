@@ -99,6 +99,23 @@ curl -s -b cj '$B/api/v1/admin/users?status=pending'
 curl -s -b cj -X POST $B/api/v1/admin/users/<user-id>/approve
 ```
 
+## YouTube preview
+
+`POST /api/v1/youtube/preview` with `{"url":"https://youtu.be/<id>"}` returns
+`{video_id, title, channel, duration_seconds, thumbnail_url, webpage_url}` so
+the SPA can show what it is about to import. Accepted shapes: `watch?v=`,
+`/shorts/`, `/embed/`, `/live/`, `youtu.be/<id>` on `youtube.com`, `www.`,
+`m.` and `music.youtube.com`; the id is re-emitted as a canonical watch URL
+before `yt-dlp --dump-single-json --no-playlist --skip-download` runs (20 s
+timeout, at most 4 processes at once). No session is needed. Successful
+lookups are cached in memory (100 entries, 10 min, keyed by video id) and
+each client IP gets 10 requests/min (`429 rate_limited` with `Retry-After`;
+behind a proxy the rightmost `X-Forwarded-For` hop is the client). Errors:
+`400 invalid_url`, `422 youtube_unavailable` (private/removed/geo-blocked,
+message from yt-dlp), `504 youtube_timeout`, `501 youtube_unsupported` when
+`yt-dlp` is not on `PATH` - `/api/v1/config` reports that as
+`"youtube_preview": false` so the SPA can hide the URL input.
+
 Errors are always `{"code":"...","message":"..."}`. Notable codes:
 `pending_approval` (403 on login), `invalid_credentials` (401),
 `claim_token_required` (403), `expired` (410 for an anonymous link past
@@ -126,6 +143,6 @@ stages: shift 6, 9, 12, 15. See `internal/pipeline/peaks`.
 ## Not in this phase
 
 Google OIDC (`POST /api/v1/auth/google` answers 501), `rk worker`
-(exits "not implemented"), the SPA, `/youtube/preview`, `/jobs/{id}/reprocess`,
+(exits "not implemented"), the SPA, `/jobs/{id}/reprocess`,
 `/jobs/{id}/download`, `/jobs/{id}/mix`, `/profile`, the GPU-runner endpoints,
 retention cleanup and `import-legacy`.

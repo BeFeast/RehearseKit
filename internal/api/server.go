@@ -20,6 +20,7 @@ import (
 	"github.com/BeFeast/RehearseKit/internal/jobs"
 	"github.com/BeFeast/RehearseKit/internal/stems"
 	"github.com/BeFeast/RehearseKit/internal/storage"
+	"github.com/BeFeast/RehearseKit/internal/youtube"
 	"github.com/BeFeast/RehearseKit/web"
 )
 
@@ -59,12 +60,15 @@ func New(cfg config.Config, pool *pgxpool.Pool) (*Server, error) {
 		}
 		respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	ytdlp := youtube.LookPath()
+	ytHandlers := youtube.NewHandlers(youtube.NewService(ytdlp, youtube.Options{}), ytdlp.Available(), youtube.HandlerOptions{})
 	mux.HandleFunc("GET /api/v1/config", func(w http.ResponseWriter, _ *http.Request) {
-		respond.JSON(w, http.StatusOK, publicConfig(cfg))
+		respond.JSON(w, http.StatusOK, publicConfig(cfg, ytHandlers.Available()))
 	})
 	auth.NewHandlers(authStore).Register(mux)
 	jobHandlers.Register(mux)
 	stems.NewHandlers(jobHandlers, layout).Register(mux)
+	ytHandlers.Register(mux)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		respond.Fail(w, respond.ErrNotFound)
 	})
@@ -122,10 +126,11 @@ type qualityInfo struct {
 	Stems int    `json:"stems"`
 }
 
-func publicConfig(cfg config.Config) map[string]any {
+func publicConfig(cfg config.Config, youtubePreview bool) map[string]any {
 	return map[string]any{
 		"google_client_id":     cfg.GoogleClientID,
 		"google_sign_in":       false,
+		"youtube_preview":      youtubePreview,
 		"max_upload_bytes":     cfg.MaxUploadBytes,
 		"anon_retention_hours": int(cfg.AnonRetention.Hours()),
 		"job_retention_days":   int(cfg.JobRetention.Hours() / 24),
