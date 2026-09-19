@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/BeFeast/RehearseKit/internal/api"
 	"github.com/BeFeast/RehearseKit/internal/auth"
+	"github.com/BeFeast/RehearseKit/internal/auth/googleid/googleidtest"
 	"github.com/BeFeast/RehearseKit/internal/config"
 	"github.com/BeFeast/RehearseKit/internal/db/dbtest"
 	"github.com/BeFeast/RehearseKit/internal/jobs"
@@ -182,16 +184,17 @@ func TestHealthConfigAndSPA(t *testing.T) {
 	if err := json.Unmarshal(body, &cfg); err != nil || resp.StatusCode != 200 {
 		t.Fatalf("config %d %s", resp.StatusCode, body)
 	}
-	if cfg["google_client_id"] != "gid" || cfg["anon_retention_hours"].(float64) != 24 || cfg["job_retention_days"].(float64) != 7 || len(cfg["qualities"].([]any)) != 3 {
+	if cfg["google_client_id"] != "gid" || cfg["google_sign_in"] != true || cfg["anon_retention_hours"].(float64) != 24 || cfg["job_retention_days"].(float64) != 7 || len(cfg["qualities"].([]any)) != 3 {
 		t.Errorf("config: %v", cfg)
 	}
 	resp, body = e.do(c, "GET", "/api/v1/nope", nil, nil)
 	if resp.StatusCode != 404 || errCode(body) != "not_found" {
 		t.Errorf("api 404: %d %s", resp.StatusCode, body)
 	}
-	resp, body = e.do(c, "POST", "/api/v1/auth/google", map[string]string{"id_token": "x"}, nil)
-	if resp.StatusCode != 501 || errCode(body) != "not_implemented" {
-		t.Errorf("google: %d %s", resp.StatusCode, body)
+	// Client id set but the token is garbage: the verifier answers, not a 501.
+	resp, body = e.do(c, "POST", "/api/v1/auth/google", map[string]string{"credential": "x"}, nil)
+	if resp.StatusCode != 401 || errCode(body) != "invalid_google_token" {
+		t.Errorf("google garbage: %d %s", resp.StatusCode, body)
 	}
 
 	resp, body = e.do(c, "GET", "/", nil, nil)
@@ -963,4 +966,206 @@ func TestSSEHeartbeat(t *testing.T) {
 	if comments < 2 {
 		t.Errorf("got %d heartbeat comments in 600ms, want >= 2", comments)
 	}
+}
+
+func TestGoogleSignInDisabled(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.client()
+	resp, body := e.do(c, "GET", "/api/v1/config", nil, nil)
+	var cfg map[string]any
+	if err := json.Unmarshal(body, &cfg); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("config %d %s", resp.StatusCode, body)
+	}
+	if cfg["google_sign_in"] != false || cfg["google_client_id"] != "" {
+		t.Errorf("config: %v", cfg)
+	}
+	resp, body = e.do(c, "POST", "/api/v1/auth/google", map[string]string{"credential": "x"}, nil)
+	if resp.StatusCode != 501 || errCode(body) != "google_not_configured" {
+		t.Errorf("google disabled: %d %s", resp.StatusCode, body)
+	}
+}
+
+func TestGoogleSignIn(t *testing.T) {
+	const clientID = "rk-test.apps.googleusercontent.com"
+	iss := googleidtest.New(t)
+	e := newEnv(t, func(c *config.Config) {
+		c.GoogleClientID = clientID
+		c.GoogleJWKSURL = iss.URL()
+	})
+	store := auth.NewStore(e.pool)
+	ctx := context.Background()
+	token := func(email, sub string, mutate func(map[string]any)) string {
+		cl := googleidtest.Claims(clientID, email)
+		cl["sub"] = sub
+		if mutate != nil {
+			mutate(cl)
+		}
+		return iss.Sign(t, "kid-1", cl)
+	}
+	post := func(c *http.Client, tok string, headers map[string]string) (*http.Response, []byte) {
+		return e.do(c, "POST", "/api/v1/auth/google", map[string]string{"credential": tok}, headers)
+	}
+	hasSession := func(resp *http.Response) bool {
+		for _, ck := range resp.Cookies() {
+			if ck.Name == auth.CookieName && ck.Value != "" {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("bad request bodies", func(t *testing.T) {
+		c := e.client()
+		resp, body := e.do(c, "POST", "/api/v1/auth/google", map[string]string{"id_token": "x"}, nil)
+		if resp.StatusCode != 400 || errCode(body) != "invalid_json" {
+			t.Errorf("legacy field: %d %s", resp.StatusCode, body)
+		}
+		resp, body = e.do(c, "POST", "/api/v1/auth/google", map[string]string{"credential": ""}, nil)
+		if resp.StatusCode != 400 || errCode(body) != "invalid_json" {
+			t.Errorf("empty credential: %d %s", resp.StatusCode, body)
+		}
+	})
+
+	t.Run("token rejections", func(t *testing.T) {
+		c := e.client()
+		cases := map[string]struct {
+			tok    string
+			status int
+			code   string
+		}{
+			"expired":     {token("x@example.com", "s1", func(m map[string]any) { m["exp"] = time.Now().Add(-time.Hour).Unix() }), 401, "invalid_google_token"},
+			"wrong aud":   {iss.Sign(t, "kid-1", googleidtest.Claims("other", "x@example.com")), 401, "invalid_google_token"},
+			"wrong iss":   {token("x@example.com", "s1", func(m map[string]any) { m["iss"] = "https://example.com" }), 401, "invalid_google_token"},
+			"foreign key": {googleidtest.SignWith(t, googleidtest.ForeignKey(t), "kid-1", "RS256", googleidtest.Claims(clientID, "x@example.com")), 401, "invalid_google_token"},
+			"unverified":  {token("x@example.com", "s1", func(m map[string]any) { m["email_verified"] = false }), 403, "email_not_verified"},
+			"no email":    {token("", "s1", nil), 401, "invalid_google_token"},
+		}
+		for name, tc := range cases {
+			resp, body := post(c, tc.tok, nil)
+			if resp.StatusCode != tc.status || errCode(body) != tc.code {
+				t.Errorf("%s: %d %s", name, resp.StatusCode, body)
+			}
+			if hasSession(resp) {
+				t.Errorf("%s: session issued", name)
+			}
+		}
+		if _, err := store.UserByEmail(ctx, "x@example.com"); !errors.Is(err, auth.ErrNotFound) {
+			t.Errorf("rejected token created a user: %v", err)
+		}
+	})
+
+	t.Run("new user is created pending", func(t *testing.T) {
+		c := e.client()
+		resp, body := post(c, token("New.Person@Example.com", "sub-new", nil), nil)
+		if resp.StatusCode != 403 || errCode(body) != "pending_approval" {
+			t.Fatalf("first sign-in: %d %s", resp.StatusCode, body)
+		}
+		if hasSession(resp) {
+			t.Error("pending user got a session")
+		}
+		var denied struct {
+			Code string     `json:"code"`
+			User *auth.User `json:"user"`
+		}
+		if err := json.Unmarshal(body, &denied); err != nil || denied.User == nil {
+			t.Fatalf("body: %s", body)
+		}
+		if denied.User.Email != "new.person@example.com" || denied.User.Status != auth.StatusPending ||
+			denied.User.Provider != auth.ProviderGoogle || denied.User.Role != auth.RoleUser ||
+			denied.User.Name != "Test User" || denied.User.AvatarURL == nil {
+			t.Errorf("user summary: %+v", denied.User)
+		}
+		u, err := store.UserByEmail(ctx, "new.person@example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.GoogleSub == nil || *u.GoogleSub != "sub-new" || u.PasswordHash != nil {
+			t.Errorf("stored user: sub=%v hash=%v", u.GoogleSub, u.PasswordHash)
+		}
+		// Second attempt while still pending: same answer, no duplicate.
+		resp, body = post(c, token("new.person@example.com", "sub-new", nil), nil)
+		if resp.StatusCode != 403 || errCode(body) != "pending_approval" {
+			t.Fatalf("second sign-in: %d %s", resp.StatusCode, body)
+		}
+		if _, total, _ := store.ListUsers(ctx, auth.ListUsersParams{Query: "new.person"}); total != 1 {
+			t.Errorf("users named new.person: %d", total)
+		}
+		resp, _ = e.do(c, "GET", "/api/v1/auth/me", nil, nil)
+		if resp.StatusCode != 401 {
+			t.Errorf("me while pending: %d", resp.StatusCode)
+		}
+
+		// Admin approves; the next Google sign-in issues a session.
+		if _, err := store.SetUserStatus(ctx, u.ID, auth.StatusActive); err != nil {
+			t.Fatal(err)
+		}
+		resp, body = post(c, token("new.person@example.com", "sub-new", nil), map[string]string{"X-Forwarded-Proto": "https"})
+		if resp.StatusCode != 200 || !hasSession(resp) {
+			t.Fatalf("approved sign-in: %d %s", resp.StatusCode, body)
+		}
+		for _, ck := range resp.Cookies() {
+			if ck.Name == auth.CookieName && (!ck.Secure || !ck.HttpOnly) {
+				t.Errorf("cookie flags: %+v", ck)
+			}
+		}
+		resp, body = e.do(c, "GET", "/api/v1/auth/me", nil, nil)
+		if resp.StatusCode != 200 || !strings.Contains(string(body), "new.person@example.com") {
+			t.Errorf("me: %d %s", resp.StatusCode, body)
+		}
+	})
+
+	t.Run("existing active password user links and signs in", func(t *testing.T) {
+		e.createUser("active@example.com", auth.StatusActive)
+		c := e.client()
+		resp, body := post(c, token("Active@Example.com", "sub-active", func(m map[string]any) {
+			m["name"] = "Google Name"
+			m["picture"] = "https://lh3.googleusercontent.com/new"
+		}), nil)
+		if resp.StatusCode != 200 || !hasSession(resp) {
+			t.Fatalf("sign-in: %d %s", resp.StatusCode, body)
+		}
+		u, err := store.UserByEmail(ctx, "active@example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Provider and password stay; sub and avatar are recorded; the
+		// existing name is not overwritten.
+		if u.Provider != auth.ProviderPassword || u.PasswordHash == nil || u.GoogleSub == nil || *u.GoogleSub != "sub-active" ||
+			u.AvatarURL == nil || *u.AvatarURL != "https://lh3.googleusercontent.com/new" || u.Name != "Test" {
+			t.Errorf("linked user: %+v sub=%v avatar=%v", u, u.GoogleSub, u.AvatarURL)
+		}
+		// Password login keeps working after linking.
+		e.login(e.client(), "active@example.com")
+
+		// A later token for the same sub with a changed Google email still
+		// maps to this account.
+		resp, body = post(e.client(), token("renamed@example.com", "sub-active", nil), nil)
+		if resp.StatusCode != 200 || !strings.Contains(string(body), `"email":"active@example.com"`) {
+			t.Errorf("sub match after email change: %d %s", resp.StatusCode, body)
+		}
+		if _, err := store.UserByEmail(ctx, "renamed@example.com"); !errors.Is(err, auth.ErrNotFound) {
+			t.Errorf("email change created a second account: %v", err)
+		}
+	})
+
+	t.Run("inactive user is refused", func(t *testing.T) {
+		e.createUser("inactive@example.com", auth.StatusInactive)
+		c := e.client()
+		resp, body := post(c, token("inactive@example.com", "sub-inactive", nil), nil)
+		if resp.StatusCode != 403 || errCode(body) != "account_inactive" || hasSession(resp) {
+			t.Fatalf("inactive: %d %s", resp.StatusCode, body)
+		}
+	})
+
+	t.Run("existing pending password user stays pending", func(t *testing.T) {
+		e.createUser("pending@example.com", auth.StatusPending)
+		c := e.client()
+		resp, body := post(c, token("pending@example.com", "sub-pending", nil), nil)
+		if resp.StatusCode != 403 || errCode(body) != "pending_approval" || hasSession(resp) {
+			t.Fatalf("pending: %d %s", resp.StatusCode, body)
+		}
+		if !strings.Contains(string(body), `"user":{`) {
+			t.Errorf("no user summary: %s", body)
+		}
+	})
 }
