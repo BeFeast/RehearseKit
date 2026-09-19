@@ -29,7 +29,7 @@ func Claim(ctx context.Context, pool *pgxpool.Pool) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := emit(ctx, tx, j.ID, StatusConverting, 0, "converting"); err != nil {
+	if err := emit(ctx, tx, j.ID, StatusConverting, 0, StatusMessage(StatusConverting, 0)); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {

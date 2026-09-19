@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project version="1.0">
+  <Application name="RehearseKit" version="test"></Application>
+  <Transport>
+    <Tempo max="999.000000" min="20.000000" unit="bpm" value="136.000000" id="tempo" name="Tempo"></Tempo>
+    <TimeSignature denominator="4" numerator="4" id="timesig"></TimeSignature>
+  </Transport>
+  <Structure>
+    <Track contentType="audio" loaded="true" id="track-vocals" name="Vocals" color="#FF6B9D">
+      <Channel audioChannels="2" destination="master-channel" role="regular" solo="false" id="channel-vocals">
+        <Mute value="false" id="channel-vocals-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="channel-vocals-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="channel-vocals-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+    <Track contentType="audio" loaded="true" id="track-drums" name="Drums" color="#FFA500">
+      <Channel audioChannels="2" destination="master-channel" role="regular" solo="false" id="channel-drums">
+        <Mute value="false" id="channel-drums-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="channel-drums-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="channel-drums-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+    <Track contentType="audio" loaded="true" id="track-bass" name="Bass" color="#4169E1">
+      <Channel audioChannels="2" destination="master-channel" role="regular" solo="false" id="channel-bass">
+        <Mute value="false" id="channel-bass-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="channel-bass-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="channel-bass-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+    <Track contentType="audio" loaded="true" id="track-other" name="Other" color="#808080">
+      <Channel audioChannels="2" destination="master-channel" role="regular" solo="false" id="channel-other">
+        <Mute value="false" id="channel-other-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="channel-other-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="channel-other-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+    <Track contentType="audio notes" loaded="true" id="master" name="Master">
+      <Channel audioChannels="2" role="master" solo="false" id="master-channel">
+        <Mute value="false" id="master-channel-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="master-channel-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="master-channel-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+  </Structure>
+  <Arrangement id="arrangement">
+    <Lanes timeUnit="beats" id="lanes">
+      <Lanes track="track-vocals" id="lanes-vocals">
+        <Clips id="clips-vocals">
+          <Clip time="0.000000" duration="408.000000" playStart="0.000000" name="Vocals">
+            <Warps contentTimeUnit="seconds" timeUnit="beats">
+              <Audio algorithm="stretch" channels="2" duration="180.000000" sampleRate="48000">
+                <File path="audio/vocals.wav"></File>
+              </Audio>
+              <Warp time="0.000000" contentTime="0.000000"></Warp>
+              <Warp time="408.000000" contentTime="180.000000"></Warp>
+            </Warps>
+          </Clip>
+        </Clips>
+      </Lanes>
+      <Lanes track="track-drums" id="lanes-drums">
+        <Clips id="clips-drums">
+          <Clip time="0.000000" duration="408.000000" playStart="0.000000" name="Drums">
+            <Warps contentTimeUnit="seconds" timeUnit="beats">
+              <Audio algorithm="stretch" channels="2" duration="180.000000" sampleRate="48000">
+                <File path="audio/drums.wav"></File>
+              </Audio>
+              <Warp time="0.000000" contentTime="0.000000"></Warp>
+              <Warp time="408.000000" contentTime="180.000000"></Warp>
+            </Warps>
+          </Clip>
+        </Clips>
+      </Lanes>
+      <Lanes track="track-bass" id="lanes-bass">
+        <Clips id="clips-bass">
+          <Clip time="0.000000" duration="408.000000" playStart="0.000000" name="Bass">
+            <Warps contentTimeUnit="seconds" timeUnit="beats">
+              <Audio algorithm="stretch" channels="2" duration="180.000000" sampleRate="48000">
+                <File path="audio/bass.wav"></File>
+              </Audio>
+              <Warp time="0.000000" contentTime="0.000000"></Warp>
+              <Warp time="408.000000" contentTime="180.000000"></Warp>
+            </Warps>
+          </Clip>
+        </Clips>
+      </Lanes>
+      <Lanes track="track-other" id="lanes-other">
+        <Clips id="clips-other">
+          <Clip time="0.000000" duration="408.000000" playStart="0.000000" name="Other">
+            <Warps contentTimeUnit="seconds" timeUnit="beats">
+              <Audio algorithm="stretch" channels="2" duration="180.000000" sampleRate="48000">
+                <File path="audio/other.wav"></File>
+              </Audio>
+              <Warp time="0.000000" contentTime="0.000000"></Warp>
+              <Warp time="408.000000" contentTime="180.000000"></Warp>
+            </Warps>
+          </Clip>
+        </Clips>
+      </Lanes>
+    </Lanes>
+  </Arrangement>
+</Project>
