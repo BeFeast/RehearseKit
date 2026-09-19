@@ -26,6 +26,8 @@ with `htdemucs`, `htdemucs_ft` and `htdemucs_6s` pre-downloaded into
 | `RK_RUNNER_ID` / `--id` | label in leases/logs (default: hostname) |
 | `RK_DEMUCS_DEVICE` / `--device` | `cuda` (default) or `cpu` |
 | `RK_DEMUCS_ARGS` / `--demucs-args` | extra demucs flags, e.g. `--segment 7` for GPUs with < 8 GB |
+| `RK_REBASE_SIGNED_URLS=1` / `--rebase-urls` | rebase the signed source/upload URLs of a lease onto `RK_API_URL` (the server builds them from `RK_PUBLIC_URL`, which the box may not reach; the signature covers only method, path and expiry). **Default on when `RK_API_URL` is a loopback address**, i.e. behind an ssh tunnel |
+| `RK_SIGNED_URL_BASE` / `--signed-url-base` | rebase onto this `scheme://host[:port]` instead of `RK_API_URL` |
 | `RK_WORK_DIR` / `--work-dir` | scratch (default `/work` in the image) |
 | `RK_POLL_INTERVAL` / `--poll` | idle poll (default `5s`) |
 | `RK_ONCE=1` / `--once` | process one job, then exit |
@@ -58,8 +60,47 @@ into the instance instead of exposing it:
 
 ```bash
 ssh -N -R 18080:127.0.0.1:18080 -p <PORT> root@<sshN.vast.ai>
-# on the instance: RK_API_URL=http://127.0.0.1:18080
+# on the instance: RK_API_URL=http://127.0.0.1:18080   (loopback → signed URLs are rebased onto it)
 ```
+
+The rebase matters whenever the server's `RK_PUBLIC_URL` is an address the
+box cannot reach: without it the agent follows the signed URLs to the
+public host (for a LAN-only origin behind Cloudflare that is a 502) and the
+job burns its attempts. With the rebase in the agent, `RK_PUBLIC_URL` on
+the server can stay the real hostname; setting it to the tunnel address
+instead (`http://127.0.0.1:18080`) also works but ties the server config
+to one runner topology.
+
+## Automatic: `rk gpu-scaler`
+
+The manual flow above is what `rk gpu-scaler` does on its own, on a host
+with outbound internet, `vastai` and ssh (not on the server): it polls
+`GET /api/v1/gpu/queue`, rents the cheapest matching offer when a job
+waits, opens the reverse ssh tunnel into the instance, starts the agent
+through the on-start script, and destroys the instance after 10 minutes
+with nothing waiting and no active lease (also at 6 h of age, or when the
+box never starts). One instance at most; it never rents below $5 of
+credit and only ever destroys instances carrying its own label.
+
+```bash
+# on the vast.ai-facing host
+go build -o ~/.local/bin/rk ./cmd/rk
+install -Dm600 scripts/gpu/scaler.env.example ~/.config/rk/scaler.env   # RK_API_URL, RK_RUNNER_TOKEN, …
+install -Dm644 deploy/gpu-runner/rk-gpu-scaler.service ~/.config/systemd/user/
+loginctl enable-linger "$USER"
+systemctl --user daemon-reload && systemctl --user enable --now rk-gpu-scaler
+journalctl --user -u rk-gpu-scaler -f     # rent → running → tunnel verified → first lease → destroyed
+rk-gpu-scaler status                      # state file: instance, timestamps, cost history
+```
+
+What it passes to `vastai create instance`: `--image $RK_SCALER_IMAGE
+--login <from ~/.docker/config.json> --ssh --direct --disk 30 --label
+rk-gpu-scaler --cancel-unavail`, `--env '-e RK_API_URL=http://127.0.0.1:18080
+-e RK_RUNNER_TOKEN=…'` and an `--onstart-cmd` that waits for `/healthz`
+through the tunnel and then runs `rk gpu-agent` (log:
+`/var/log/rk-gpu-agent.log` on the instance). Policy and variables:
+[`docs/rebuild/README.md`](../../docs/rebuild/README.md#gpu-autoscaler-rk-gpu-scaler),
+`scripts/gpu/scaler.env.example`.
 
 ## Runtime notes
 
@@ -78,4 +119,10 @@ ssh -N -R 18080:127.0.0.1:18080 -p <PORT> root@<sshN.vast.ai>
 * A lease expires after `RK_GPU_LEASE_TTL` (server side, default 10 min)
   without a heartbeat; the agent heartbeats every `TTL/4`. If the server
   answers 409/410 the job was cancelled and demucs is killed.
+* After a failed job the agent waits `RK_POLL_INTERVAL` before leasing
+  again, so a broken runner environment cannot use up a job's three
+  attempts within seconds.
 * Three failed or expired leases fail the job.
+* `GET /api/v1/gpu/queue` (runner token) answers `{"waiting": N,
+  "active_leases": M, "oldest_waiting_at": …}` for autoscalers; `waiting`
+  is what the next lease call would be offered.

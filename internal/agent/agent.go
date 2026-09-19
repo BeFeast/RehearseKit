@@ -14,7 +14,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +39,15 @@ type Config struct {
 	Poll        time.Duration // idle polling interval; default 5s
 	Once        bool          // process at most one job, then return
 	DemucsExtra []string      // extra demucs args
+	// SignedURLBase, when set, replaces the scheme and host of the signed
+	// source/upload URLs in a lease (the server builds them from its public
+	// URL, which a runner behind an ssh tunnel cannot reach). The signature
+	// covers method, path and expiry only, so rebasing keeps it valid.
+	SignedURLBase string
+	// RebaseSignedURLs rebases the signed URLs onto APIURL (a shorthand for
+	// SignedURLBase = APIURL). Defaults to on when APIURL points at a
+	// loopback address, which is what an ssh tunnel looks like.
+	RebaseSignedURLs bool
 }
 
 // Agent runs the lease loop.
@@ -69,12 +80,20 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.Poll <= 0 {
 		cfg.Poll = 5 * time.Second
 	}
+	cfg.SignedURLBase = strings.TrimRight(cfg.SignedURLBase, "/")
+	if cfg.SignedURLBase != "" {
+		if u, err := url.Parse(cfg.SignedURLBase); err != nil || u.Scheme == "" || u.Host == "" {
+			return nil, fmt.Errorf("RK_SIGNED_URL_BASE %q must be scheme://host[:port]", cfg.SignedURLBase)
+		}
+	} else if cfg.RebaseSignedURLs || apiIsLoopback(cfg.APIURL) {
+		cfg.SignedURLBase = cfg.APIURL
+	}
 	return &Agent{cfg: cfg, http: &http.Client{}}, nil
 }
 
 // Run loops until ctx is cancelled (or after one job with Once).
 func (a *Agent) Run(ctx context.Context) error {
-	slog.Info("rk gpu-agent", "api", a.cfg.APIURL, "runner", a.cfg.RunnerID, "device", a.cfg.Device, "once", a.cfg.Once)
+	slog.Info("rk gpu-agent", "api", a.cfg.APIURL, "runner", a.cfg.RunnerID, "device", a.cfg.Device, "once", a.cfg.Once, "signed_url_base", a.cfg.SignedURLBase)
 	if err := demucs.Check(ctx, a.cfg.Python); err != nil {
 		return err
 	}
@@ -86,15 +105,65 @@ func (a *Agent) Run(ctx context.Context) error {
 		if a.cfg.Once && (ran || err != nil) {
 			return err
 		}
-		if ran {
+		if ran && err == nil {
 			continue
 		}
+		// Idle, or the job failed: wait before leasing again so a runner
+		// with a broken environment does not burn a job's attempts in seconds.
 		select {
 		case <-ctx.Done():
 		case <-time.After(a.cfg.Poll):
 		}
 	}
 	return nil
+}
+
+// apiIsLoopback reports whether the API URL points at this machine
+// (127.0.0.0/8, ::1, localhost) — the shape of an ssh tunnel.
+func apiIsLoopback(api string) bool {
+	u, err := url.Parse(api)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// rebase rewrites the signed URLs of a lease onto cfg.SignedURLBase.
+func (a *Agent) rebase(lease *gpu.LeaseResponse) error {
+	if a.cfg.SignedURLBase == "" {
+		return nil
+	}
+	var err error
+	if lease.SourceURL, err = rebaseURL(a.cfg.SignedURLBase, lease.SourceURL); err != nil {
+		return err
+	}
+	for name, u := range lease.UploadURLs {
+		if lease.UploadURLs[name], err = rebaseURL(a.cfg.SignedURLBase, u); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rebaseURL keeps path and query of raw and puts them under base.
+func rebaseURL(base, raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("signed url %q: %w", raw, err)
+	}
+	if u.Path == "" {
+		return "", fmt.Errorf("signed url %q has no path", raw)
+	}
+	out := base + u.EscapedPath()
+	if u.RawQuery != "" {
+		out += "?" + u.RawQuery
+	}
+	return out, nil
 }
 
 // apiError is a non-2xx response.
@@ -156,6 +225,9 @@ func (a *Agent) RunOnce(ctx context.Context) (bool, error) {
 	}
 	if status == http.StatusNoContent || lease.LeaseID == "" {
 		return false, nil
+	}
+	if err := a.rebase(&lease); err != nil {
+		return false, fmt.Errorf("lease: %w", err)
 	}
 	log := slog.With("lease", lease.LeaseID, "job", lease.JobID, "model", lease.Model)
 	log.Info("leased job", "stems", lease.Stems, "expires_at", lease.ExpiresAt)

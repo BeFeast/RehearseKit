@@ -7,6 +7,7 @@
 //	rk peaks          write peaks/<stem>.pk for a job's stems (dev helper)
 //	rk worker         run the CPU pipeline worker and sweepers
 //	rk gpu-agent      run the GPU runner loop (on the GPU box)
+//	rk gpu-scaler     rent/destroy a vast.ai GPU runner on demand (on a host with vastai + ssh)
 package main
 
 import (
@@ -56,6 +57,8 @@ func main() {
 		err = runWorker(os.Args[2:])
 	case "gpu-agent":
 		err = runGPUAgent(os.Args[2:])
+	case "gpu-scaler":
+		err = runGPUScaler(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 		return
@@ -81,7 +84,9 @@ commands:
                  [--retention-days N]  import the FastAPI deployment (RK_DATABASE_URL, RK_DATA_DIR)
   peaks          <job-id>  build jobs/<id>/peaks/*.pk from jobs/<id>/stems/*.wav (RK_DATA_DIR)
   worker         run the CPU pipeline worker (RK_DATABASE_URL, RK_DATA_DIR, RK_PYTHON, RK_LOCAL_DEMUCS)
-  gpu-agent      run the GPU runner (RK_API_URL, RK_RUNNER_TOKEN, RK_RUNNER_ID; --once, --poll, --device)`)
+  gpu-agent      run the GPU runner (RK_API_URL, RK_RUNNER_TOKEN, RK_RUNNER_ID, RK_SIGNED_URL_BASE; --once, --poll, --device)
+  gpu-scaler     rent a vast.ai GPU runner while jobs wait, tunnel it to rk serve, destroy it when idle
+                 (RK_API_URL, RK_RUNNER_TOKEN, RK_SCALER_*; --once)`)
 }
 
 func logLevel() slog.Level {
@@ -219,12 +224,15 @@ func runGPUAgent(args []string) error {
 	poll := fs.Duration("poll", envDuration("RK_POLL_INTERVAL", 5*time.Second), "idle polling interval (or RK_POLL_INTERVAL)")
 	once := fs.Bool("once", os.Getenv("RK_ONCE") == "1", "process one job and exit (or RK_ONCE=1)")
 	extra := fs.String("demucs-args", os.Getenv("RK_DEMUCS_ARGS"), "extra demucs arguments, space separated (or RK_DEMUCS_ARGS), e.g. \"--segment 7\"")
+	signedBase := fs.String("signed-url-base", os.Getenv("RK_SIGNED_URL_BASE"), "replace scheme://host of the signed source/upload URLs, e.g. http://127.0.0.1:18080 behind an ssh tunnel (or RK_SIGNED_URL_BASE)")
+	rebase := fs.Bool("rebase-urls", os.Getenv("RK_REBASE_SIGNED_URLS") == "1", "rebase the signed URLs onto --api (or RK_REBASE_SIGNED_URLS=1; default on when --api is a loopback address)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	a, err := agent.New(agent.Config{
 		APIURL: *apiURL, Token: *token, RunnerID: *runnerID, Python: *python, Device: *device,
-		WorkDir: *workDir, Poll: *poll, Once: *once, DemucsExtra: strings.Fields(*extra),
+		WorkDir: *workDir, Poll: *poll, Once: *once, DemucsExtra: strings.Fields(*extra), SignedURLBase: *signedBase,
+		RebaseSignedURLs: *rebase,
 	})
 	if err != nil {
 		return err

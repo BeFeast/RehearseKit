@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# rk-gpu-scaler: run the on-demand vast.ai GPU runner launcher.
+#
+# Thin wrapper around `rk gpu-scaler` for hosts that run it outside systemd
+# (the unit in deploy/gpu-runner/rk-gpu-scaler.service calls rk directly).
+# Reads the same environment file the unit uses.
+#
+#   rk-gpu-scaler                # loop
+#   rk-gpu-scaler --once         # one tick, then exit (see what it would do)
+#   rk-gpu-scaler status         # print the state file
+#
+# Environment file (RK_SCALER_ENV, default ~/.config/rk/scaler.env):
+#   RK_API_URL, RK_RUNNER_TOKEN, optional RK_DATABASE_URL, RK_SCALER_* — see
+#   scripts/gpu/scaler.env.example and deploy/gpu-runner/README.md.
+set -euo pipefail
+
+ENV_FILE="${RK_SCALER_ENV:-$HOME/.config/rk/scaler.env}"
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+
+RK_BIN="${RK_BIN:-$(command -v rk || echo "$HOME/.local/bin/rk")}"
+STATE_DIR="${RK_SCALER_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/rk-gpu-scaler}"
+
+case "${1:-}" in
+  status)
+    if [[ -f "$STATE_DIR/state.json" ]]; then
+      cat "$STATE_DIR/state.json"
+    else
+      echo "no state at $STATE_DIR/state.json (nothing rented yet)"
+    fi
+    ;;
+  *)
+    exec "$RK_BIN" gpu-scaler "$@"
+    ;;
+esac
