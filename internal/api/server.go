@@ -16,6 +16,7 @@ import (
 
 	"github.com/BeFeast/RehearseKit/internal/api/respond"
 	"github.com/BeFeast/RehearseKit/internal/auth"
+	"github.com/BeFeast/RehearseKit/internal/auth/googleid"
 	"github.com/BeFeast/RehearseKit/internal/config"
 	"github.com/BeFeast/RehearseKit/internal/jobs"
 	"github.com/BeFeast/RehearseKit/internal/stems"
@@ -65,7 +66,11 @@ func New(cfg config.Config, pool *pgxpool.Pool) (*Server, error) {
 	mux.HandleFunc("GET /api/v1/config", func(w http.ResponseWriter, _ *http.Request) {
 		respond.JSON(w, http.StatusOK, publicConfig(cfg, ytHandlers.Available()))
 	})
-	auth.NewHandlers(authStore).Register(mux)
+	var google *googleid.Verifier
+	if cfg.GoogleClientID != "" {
+		google = googleid.New(googleid.Options{ClientID: cfg.GoogleClientID, JWKSURL: cfg.GoogleJWKSURL})
+	}
+	auth.NewHandlers(authStore, google).Register(mux)
 	jobHandlers.Register(mux)
 	stems.NewHandlers(jobHandlers, layout).Register(mux)
 	ytHandlers.Register(mux)
@@ -129,7 +134,7 @@ type qualityInfo struct {
 func publicConfig(cfg config.Config, youtubePreview bool) map[string]any {
 	return map[string]any{
 		"google_client_id":     cfg.GoogleClientID,
-		"google_sign_in":       false,
+		"google_sign_in":       cfg.GoogleClientID != "",
 		"youtube_preview":      youtubePreview,
 		"max_upload_bytes":     cfg.MaxUploadBytes,
 		"anon_retention_hours": int(cfg.AnonRetention.Hours()),

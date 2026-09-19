@@ -40,6 +40,7 @@ type User struct {
 	AvatarURL    *string    `json:"avatar_url"`
 	Provider     string     `json:"provider"`
 	PasswordHash *string    `json:"-"`
+	GoogleSub    *string    `json:"-"`
 	Role         string     `json:"role"`
 	Status       string     `json:"status"`
 	CreatedAt    time.Time  `json:"created_at"`
@@ -77,11 +78,11 @@ var (
 	ErrInvalidStatus = errors.New("auth: invalid status")
 )
 
-const userColumns = `id, email, name, avatar_url, provider, password_hash, role, status, created_at, last_login_at`
+const userColumns = `id, email, name, avatar_url, provider, password_hash, google_sub, role, status, created_at, last_login_at`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Provider, &u.PasswordHash, &u.Role, &u.Status, &u.CreatedAt, &u.LastLoginAt)
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Provider, &u.PasswordHash, &u.GoogleSub, &u.Role, &u.Status, &u.CreatedAt, &u.LastLoginAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -98,12 +99,14 @@ func NormalizeEmail(email string) string {
 
 // CreateUserParams describes a new user.
 type CreateUserParams struct {
-	Email    string
-	Name     string
-	Password string // plaintext; hashed here. Empty for non-password providers.
-	Provider string
-	Role     string
-	Status   string
+	Email     string
+	Name      string
+	Password  string // plaintext; hashed here. Empty for non-password providers.
+	Provider  string
+	Role      string
+	Status    string
+	AvatarURL string // optional
+	GoogleSub string // optional; set for ProviderGoogle
 }
 
 // CreateUser inserts a user. Returns ErrEmailTaken on duplicate email.
@@ -129,15 +132,46 @@ func (s *Store) CreateUser(ctx context.Context, p CreateUserParams) (*User, erro
 	if p.Status == "" {
 		p.Status = StatusPending
 	}
-	row := s.pool.QueryRow(ctx, `INSERT INTO users (id, email, name, provider, password_hash, role, status)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
+	row := s.pool.QueryRow(ctx, `INSERT INTO users (id, email, name, avatar_url, provider, password_hash, google_sub, role, status)
+		VALUES (gen_random_uuid(), $1, $2, NULLIF($3, ''), $4, $5, NULLIF($6, ''), $7, $8)
 		ON CONFLICT (email) DO NOTHING
-		RETURNING `+userColumns, email, p.Name, p.Provider, hash, p.Role, p.Status)
+		RETURNING `+userColumns, email, p.Name, p.AvatarURL, p.Provider, hash, p.GoogleSub, p.Role, p.Status)
 	u, err := scanUser(row)
 	if errors.Is(err, ErrNotFound) {
 		return nil, ErrEmailTaken
 	}
 	return u, err
+}
+
+// UserByGoogleSub looks a user up by the Google account id recorded at
+// their first Google sign-in.
+func (s *Store) UserByGoogleSub(ctx context.Context, sub string) (*User, error) {
+	if sub == "" {
+		return nil, ErrNotFound
+	}
+	return scanUser(s.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE google_sub = $1`, sub))
+}
+
+// GoogleProfile is what a verified ID token tells us about the account.
+type GoogleProfile struct {
+	Sub       string
+	Name      string
+	AvatarURL string
+}
+
+// LinkGoogle records a Google sign-in on an existing user: stores the
+// account id, refreshes the avatar and fills in an empty name. The
+// provider and password hash are left alone so a password account keeps
+// working with either method.
+func (s *Store) LinkGoogle(ctx context.Context, id string, p GoogleProfile) (*User, error) {
+	if p.Sub == "" {
+		return nil, errors.New("auth: google sub required")
+	}
+	return scanUser(s.pool.QueryRow(ctx, `UPDATE users SET
+			google_sub = $2,
+			avatar_url = COALESCE(NULLIF($3, ''), avatar_url),
+			name = CASE WHEN name = '' THEN $4 ELSE name END
+		WHERE id = $1 RETURNING `+userColumns, id, p.Sub, clampText(p.AvatarURL, 2048), clampText(p.Name, 200)))
 }
 
 // UpsertAdmin creates or updates a password admin account; used by

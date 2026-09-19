@@ -2,20 +2,26 @@ package auth
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/BeFeast/RehearseKit/internal/api/respond"
+	"github.com/BeFeast/RehearseKit/internal/auth/googleid"
 )
 
 // Handlers serves /api/v1/auth/* and /api/v1/admin/users*.
 type Handlers struct {
-	store *Store
+	store          *Store
+	googleVerifier *googleid.Verifier // nil when RK_GOOGLE_CLIENT_ID is unset
 }
 
-// NewHandlers builds the auth handlers.
-func NewHandlers(store *Store) *Handlers { return &Handlers{store: store} }
+// NewHandlers builds the auth handlers. google may be nil, in which case
+// POST /api/v1/auth/google answers 501 google_not_configured.
+func NewHandlers(store *Store, google *googleid.Verifier) *Handlers {
+	return &Handlers{store: store, googleVerifier: google}
+}
 
 // Register mounts the auth routes on mux. Paths are absolute.
 func (h *Handlers) Register(mux *http.ServeMux) {
@@ -23,7 +29,7 @@ func (h *Handlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/register", h.register)
 	mux.HandleFunc("POST /api/v1/auth/logout", h.logout)
 	mux.Handle("GET /api/v1/auth/me", RequireSession(http.HandlerFunc(h.me)))
-	mux.HandleFunc("POST /api/v1/auth/google", h.googleNotImplemented)
+	mux.HandleFunc("POST /api/v1/auth/google", h.googleSignIn)
 
 	mux.Handle("GET /api/v1/admin/users", RequireAdmin(http.HandlerFunc(h.adminListUsers)))
 	mux.Handle("POST /api/v1/admin/users/{id}/approve", RequireAdmin(http.HandlerFunc(h.adminSetStatus(StatusActive))))
@@ -134,9 +140,102 @@ func (h *Handlers) me(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, UserFrom(r.Context()))
 }
 
-func (h *Handlers) googleNotImplemented(w http.ResponseWriter, _ *http.Request) {
-	respond.Failf(w, http.StatusNotImplemented, "not_implemented",
-		"Google sign-in is not available in this build; use email and password")
+// statusDenied is the 403 envelope for pending accounts: the usual
+// {"code","message"} plus the user, so the SPA can show who is waiting on
+// /pending-approval without a session.
+type statusDenied struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	User    *User  `json:"user"`
+}
+
+// google signs a user in with a Google Identity Services ID token
+// ({"credential": "<jwt>"}, the field name GIS uses). The token is verified
+// against Google's JWKS; then the account is matched by Google sub, else by
+// email, else created in the pending state. Sessions are only issued to
+// active accounts.
+func (h *Handlers) googleSignIn(w http.ResponseWriter, r *http.Request) {
+	if h.googleVerifier == nil {
+		respond.Failf(w, http.StatusNotImplemented, "google_not_configured",
+			"Google sign-in is not enabled on this server; use email and password")
+		return
+	}
+	var body struct {
+		Credential string `json:"credential"`
+	}
+	if err := respond.DecodeJSON(r, &body); err != nil {
+		respond.Fail(w, err)
+		return
+	}
+	if body.Credential == "" || len(body.Credential) > 8192 {
+		respond.Failf(w, http.StatusBadRequest, "invalid_json", "credential is required")
+		return
+	}
+	claims, err := h.googleVerifier.Verify(r.Context(), body.Credential)
+	if err != nil {
+		var ge *googleid.Error
+		switch {
+		case errors.Is(err, googleid.ErrEmailNotVerified):
+			respond.Failf(w, http.StatusForbidden, "email_not_verified", "your Google account email is not verified")
+		case errors.As(err, &ge):
+			slog.Debug("google id token rejected", "reason", ge.Reason, "detail", ge.Detail)
+			respond.Failf(w, http.StatusUnauthorized, "invalid_google_token", "Google sign-in could not be verified; try again")
+		default:
+			slog.Warn("google jwks", "err", err)
+			respond.Failf(w, http.StatusServiceUnavailable, "google_unavailable", "Google sign-in is temporarily unavailable")
+		}
+		return
+	}
+	email := NormalizeEmail(claims.Email)
+	if email == "" || !strings.Contains(email, "@") || len(email) > 254 {
+		respond.Failf(w, http.StatusUnauthorized, "invalid_google_token", "Google account has no usable email")
+		return
+	}
+	profile := GoogleProfile{Sub: claims.Subject, Name: strings.TrimSpace(claims.Name), AvatarURL: claims.Picture}
+
+	u, err := h.store.UserByGoogleSub(r.Context(), claims.Subject)
+	if errors.Is(err, ErrNotFound) {
+		u, err = h.store.UserByEmail(r.Context(), email)
+	}
+	created := false
+	if errors.Is(err, ErrNotFound) {
+		u, err = h.store.CreateUser(r.Context(), CreateUserParams{
+			Email: email, Name: clampText(profile.Name, 200), AvatarURL: clampText(profile.AvatarURL, 2048),
+			Provider: ProviderGoogle, GoogleSub: profile.Sub, Role: RoleUser, Status: StatusPending,
+		})
+		created = err == nil
+		if errors.Is(err, ErrEmailTaken) {
+			// Lost a race with a concurrent first sign-in or registration.
+			u, err = h.store.UserByEmail(r.Context(), email)
+		}
+	}
+	if err != nil {
+		respond.Fail(w, err)
+		return
+	}
+	if !created {
+		if u, err = h.store.LinkGoogle(r.Context(), u.ID, profile); err != nil {
+			respond.Fail(w, err)
+			return
+		}
+	}
+	switch u.Status {
+	case StatusPending:
+		respond.JSON(w, http.StatusForbidden, statusDenied{
+			Code: "pending_approval", Message: "your account is waiting for admin approval", User: u,
+		})
+		return
+	case StatusInactive:
+		respond.Failf(w, http.StatusForbidden, "account_inactive", "your account has been deactivated")
+		return
+	}
+	sess, err := h.store.CreateSession(r.Context(), u.ID, r.UserAgent())
+	if err != nil {
+		respond.Fail(w, err)
+		return
+	}
+	SetSessionCookie(w, r, sess)
+	respond.JSON(w, http.StatusOK, u)
 }
 
 type usersPage struct {

@@ -26,8 +26,12 @@ type Config struct {
 	AnonRetention time.Duration
 	// MaxUploadBytes caps a multipart upload (RK_MAX_UPLOAD_BYTES, default 1 GiB).
 	MaxUploadBytes int64
-	// GoogleClientID is reported by /api/v1/config; Google sign-in itself is not implemented yet.
+	// GoogleClientID is the OAuth client id ID tokens must be issued for
+	// (RK_GOOGLE_CLIENT_ID). Empty disables Google sign-in.
 	GoogleClientID string
+	// GoogleJWKSURL overrides Google's certificate endpoint; empty means the
+	// real one. Not read from the environment; tests set it.
+	GoogleJWKSURL string
 }
 
 // Defaults returns the configuration used when no RK_* variables are set.
