@@ -26,6 +26,7 @@ with `htdemucs`, `htdemucs_ft` and `htdemucs_6s` pre-downloaded into
 | `RK_RUNNER_ID` / `--id` | label in leases/logs (default: hostname) |
 | `RK_DEMUCS_DEVICE` / `--device` | `cuda` (default) or `cpu` |
 | `RK_DEMUCS_ARGS` / `--demucs-args` | extra demucs flags, e.g. `--segment 7` for GPUs with < 8 GB |
+| `RK_SIGNED_URL_BASE` / `--signed-url-base` | replace `scheme://host` of the signed source/upload URLs, e.g. `http://127.0.0.1:18080` behind an ssh tunnel (the server builds them from `RK_PUBLIC_URL`, which the box may not reach; the signature covers only method, path and expiry) |
 | `RK_WORK_DIR` / `--work-dir` | scratch (default `/work` in the image) |
 | `RK_POLL_INTERVAL` / `--poll` | idle poll (default `5s`) |
 | `RK_ONCE=1` / `--once` | process one job, then exit |
@@ -58,8 +59,13 @@ into the instance instead of exposing it:
 
 ```bash
 ssh -N -R 18080:127.0.0.1:18080 -p <PORT> root@<sshN.vast.ai>
-# on the instance: RK_API_URL=http://127.0.0.1:18080
+# on the instance: RK_API_URL=http://127.0.0.1:18080 RK_SIGNED_URL_BASE=http://127.0.0.1:18080
 ```
+
+`RK_SIGNED_URL_BASE` matters whenever the server has `RK_PUBLIC_URL` set to
+an address the box cannot reach: without it the agent follows the signed
+URLs to the public host (for a LAN-only origin behind Cloudflare that is a
+502) and the job burns its attempts.
 
 ## Automatic: `rk gpu-scaler`
 
@@ -109,6 +115,9 @@ through the tunnel and then runs `rk gpu-agent` (log:
 * A lease expires after `RK_GPU_LEASE_TTL` (server side, default 10 min)
   without a heartbeat; the agent heartbeats every `TTL/4`. If the server
   answers 409/410 the job was cancelled and demucs is killed.
+* After a failed job the agent waits `RK_POLL_INTERVAL` before leasing
+  again, so a broken runner environment cannot use up a job's three
+  attempts within seconds.
 * Three failed or expired leases fail the job.
 * `GET /api/v1/gpu/queue` (runner token) answers `{"waiting": N,
   "active_leases": M, "oldest_waiting_at": …}` for autoscalers; `waiting`
