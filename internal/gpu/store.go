@@ -257,7 +257,13 @@ func (s *Store) Complete(ctx context.Context, leaseID, runnerID string, reported
 		return err
 	}
 	p := jobs.StageStart(jobs.StatusFinalizing)
+	// The lease is already closed; if the job transition fails transiently,
+	// reopen the lease so the runner's retry (or the sweeper) can finish the
+	// hand-off instead of leaving a lease-less job stuck in separating.
 	if err := jobs.Transition(ctx, s.pool, j.ID, jobs.StatusFinalizing, p, jobs.StatusMessage(jobs.StatusFinalizing, p)); err != nil {
+		if !errors.Is(err, jobs.ErrTerminal) {
+			_, _ = s.pool.Exec(ctx, `UPDATE gpu_leases SET state = 'active', heartbeat_at = now(), expires_at = now() + $2 WHERE id = $1 AND state = $3`, leaseID, s.TTL, StateCompleted)
+		}
 		if errors.Is(err, jobs.ErrTerminal) {
 			return ErrJobGone
 		}
