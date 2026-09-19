@@ -12,7 +12,13 @@ export interface AuthState {
   loading: boolean;
   refresh(): Promise<User | null>;
   signOut(): Promise<void>;
-  /** Open the sign-in dialog; `next` runs after a successful sign-in. */
+  /**
+   * Open the sign-in dialog; `next` runs after a successful sign-in.
+   * On a cross-origin isolated document (the job page) there is no dialog:
+   * the call hands off to `/jobs?signin=1&next=<this page>` with a full
+   * load and `next` is dropped — the page itself is reloaded after sign-in,
+   * so callers on the job page must not rely on in-memory side effects.
+   */
   openSignIn(next?: () => void): void;
   closeSignIn(): void;
   signInOpen: boolean;

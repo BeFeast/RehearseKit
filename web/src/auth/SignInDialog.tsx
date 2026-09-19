@@ -134,7 +134,10 @@ export function SignInDialog() {
       if (err instanceof ApiError) {
         const bodyUser = (err.body as { user?: Partial<User> } | null)?.user;
         if (err.code === 'pending_approval') {
-          pendingApproval(bodyUser?.email ?? '');
+          // The 403 body carries the user; without an email the approval page
+          // would render blank, so stay in the dialog with the banner instead.
+          if (bodyUser?.email) pendingApproval(bodyUser.email);
+          else setBanner({ kind: 'not-approved' });
         } else if (err.code === 'account_inactive') {
           setBanner({ kind: 'inactive' });
         } else if (err.code === 'email_not_verified') {
