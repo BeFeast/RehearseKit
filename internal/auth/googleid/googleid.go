@@ -31,6 +31,10 @@ import (
 // DefaultJWKSURL is Google's OAuth2 v3 certificate endpoint.
 const DefaultJWKSURL = "https://www.googleapis.com/oauth2/v3/certs"
 
+// fetchTimeout bounds one JWKS download. The fetch runs on a context
+// detached from the triggering request, so this is its only deadline.
+const fetchTimeout = 10 * time.Second
+
 // Verification failures. All are wrapped in *Error so the handler can map
 // them to one 401 without leaking which check failed to the caller.
 var (
@@ -107,10 +111,14 @@ type Verifier struct {
 	minRefetchInterval time.Duration
 	maxCacheAge        time.Duration
 
+	// mu guards the cache fields and is only ever held briefly; fetchMu
+	// serialises downloads so a slow JWKS round trip never blocks a Verify
+	// whose key is already cached.
 	mu          sync.Mutex
 	keys        map[string]*rsa.PublicKey
 	expiresAt   time.Time // cache validity end
 	lastFetchAt time.Time
+	fetchMu     sync.Mutex
 }
 
 // New builds a Verifier. It panics if ClientID is empty: the caller must
@@ -296,31 +304,60 @@ func boolClaim(raw json.RawMessage) bool {
 // key returns the public key for kid, refetching the JWKS when the cache is
 // stale or does not contain kid (subject to the refetch throttle).
 func (v *Verifier) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+	if k, ok := v.cached(kid); ok {
+		return k, nil
+	}
+	// Slow path. Only one goroutine downloads at a time; the others queue
+	// here and usually find the key on re-check.
+	v.fetchMu.Lock()
+	defer v.fetchMu.Unlock()
+	if k, ok := v.cached(kid); ok {
+		return k, nil
+	}
+	v.mu.Lock()
+	now := v.now()
+	throttled := v.keys != nil && now.Before(v.expiresAt) && now.Sub(v.lastFetchAt) < v.minRefetchInterval
+	if !throttled {
+		v.lastFetchAt = now
+	}
+	v.mu.Unlock()
+	if throttled {
+		return nil, fail(ErrUnknownKey, kid)
+	}
+
+	// The download serves every caller, not just this request, so it must
+	// not die with the request that happened to trigger it.
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
+	defer cancel()
+	keys, ttl, err := v.fetch(fctx)
+
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	now := v.now()
-	if v.keys != nil && now.Before(v.expiresAt) {
+	if err != nil {
+		// A fetch failure should not take sign-in down while the previous
+		// key set may still be valid.
 		if k, ok := v.keys[kid]; ok {
 			return k, nil
 		}
-		if now.Sub(v.lastFetchAt) < v.minRefetchInterval {
-			return nil, fail(ErrUnknownKey, kid)
-		}
-	}
-	if err := v.fetchLocked(ctx); err != nil {
-		if v.keys != nil {
-			// A fetch failure should not take sign-in down while the
-			// previous key set may still be valid.
-			if k, ok := v.keys[kid]; ok {
-				return k, nil
-			}
-		}
 		return nil, fmt.Errorf("googleid: fetch jwks: %w", err)
 	}
-	if k, ok := v.keys[kid]; ok {
+	v.keys = keys
+	v.expiresAt = v.now().Add(ttl)
+	if k, ok := keys[kid]; ok {
 		return k, nil
 	}
 	return nil, fail(ErrUnknownKey, kid)
+}
+
+// cached returns kid from a still-valid cache.
+func (v *Verifier) cached(kid string) (*rsa.PublicKey, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.keys == nil || !v.now().Before(v.expiresAt) {
+		return nil, false
+	}
+	k, ok := v.keys[kid]
+	return k, ok
 }
 
 type jwk struct {
@@ -336,29 +373,29 @@ type jwks struct {
 	Keys []jwk `json:"keys"`
 }
 
-// fetchLocked downloads the JWKS and replaces the cache. Caller holds mu.
-func (v *Verifier) fetchLocked(ctx context.Context) error {
-	v.lastFetchAt = v.now()
+// fetch downloads the JWKS and returns the usable keys with the cache TTL
+// derived from the response headers. It touches no Verifier state.
+func (v *Verifier) fetch(ctx context.Context) (map[string]*rsa.PublicKey, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, nil)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := v.http.Do(req)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: HTTP %d", v.jwksURL, resp.StatusCode)
+		return nil, 0, fmt.Errorf("%s: HTTP %d", v.jwksURL, resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 	var set jwks
 	if err := json.Unmarshal(body, &set); err != nil {
-		return fmt.Errorf("decode jwks: %w", err)
+		return nil, 0, fmt.Errorf("decode jwks: %w", err)
 	}
 	keys := make(map[string]*rsa.PublicKey, len(set.Keys))
 	for _, k := range set.Keys {
@@ -372,11 +409,9 @@ func (v *Verifier) fetchLocked(ctx context.Context) error {
 		keys[k.Kid] = pub
 	}
 	if len(keys) == 0 {
-		return errors.New("jwks contains no usable RS256 keys")
+		return nil, 0, errors.New("jwks contains no usable RS256 keys")
 	}
-	v.keys = keys
-	v.expiresAt = v.now().Add(v.cacheTTL(resp.Header))
-	return nil
+	return keys, v.cacheTTL(resp.Header), nil
 }
 
 // cacheTTL derives the cache lifetime from Cache-Control max-age minus Age,

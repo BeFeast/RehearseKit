@@ -28,6 +28,9 @@ type Issuer struct {
 	MaxAge int
 	// Fetches counts JWKS requests served.
 	Fetches atomic.Int64
+	// Gate, when non-nil, is called at the start of every JWKS request;
+	// tests use it to hold a fetch open.
+	Gate func()
 
 	mu   sync.Mutex
 	keys map[string]*rsa.PrivateKey
@@ -119,6 +122,9 @@ func ForeignKey(t testing.TB) *rsa.PrivateKey {
 
 func (i *Issuer) serveJWKS(w http.ResponseWriter, _ *http.Request) {
 	i.Fetches.Add(1)
+	if i.Gate != nil {
+		i.Gate()
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	var keys []map[string]string

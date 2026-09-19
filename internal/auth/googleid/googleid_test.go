@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -272,4 +273,90 @@ func TestNewRequiresClientID(t *testing.T) {
 		}
 	}()
 	googleid.New(googleid.Options{})
+}
+
+// A cached key must verify while another goroutine is stuck downloading
+// the JWKS; only callers that need the refetch wait for it.
+func TestCachedKeyNotBlockedByFetch(t *testing.T) {
+	iss := googleidtest.New(t)
+	now := time.Now()
+	var mu sync.Mutex
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	v := newVerifier(t, iss, func(o *googleid.Options) { o.Now = clock })
+	ctx := context.Background()
+	tok := func(kid string) string {
+		c := googleidtest.Claims(aud, "a@b.c")
+		c["iat"], c["exp"] = clock().Unix(), clock().Add(time.Hour).Unix()
+		return iss.Sign(t, kid, c)
+	}
+	if _, err := v.Verify(ctx, tok("kid-1")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the next JWKS response open.
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	iss.Gate = func() {
+		once.Do(func() { close(entered) })
+		<-release
+	}
+	iss.AddKey(t, "kid-2")
+	advance(2 * time.Minute) // past the unknown-kid throttle
+	slow := make(chan error, 1)
+	go func() {
+		_, err := v.Verify(ctx, tok("kid-2"))
+		slow <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refetch never started")
+	}
+
+	// While that download hangs, a token for the cached key must still verify.
+	fast := make(chan error, 1)
+	go func() {
+		_, err := v.Verify(ctx, tok("kid-1"))
+		fast <- err
+	}()
+	select {
+	case err := <-fast:
+		if err != nil {
+			t.Fatalf("cached verify during fetch: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cached verify blocked behind the JWKS fetch")
+	}
+	select {
+	case err := <-slow:
+		t.Fatalf("refetch finished before release: %v", err)
+	default:
+	}
+
+	close(release)
+	select {
+	case err := <-slow:
+		if err != nil {
+			t.Fatalf("kid-2 after release: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("refetch never finished")
+	}
+}
+
+// The JWKS download is shared state, so a cancelled request context must
+// not abort it.
+func TestFetchSurvivesCancelledRequestContext(t *testing.T) {
+	iss := googleidtest.New(t)
+	v := newVerifier(t, iss, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := v.Verify(ctx, iss.Sign(t, "kid-1", googleidtest.Claims(aud, "a@b.c"))); err != nil {
+		t.Fatalf("cold verify with cancelled ctx: %v", err)
+	}
+	if n := iss.Fetches.Load(); n != 1 {
+		t.Fatalf("fetches: %d", n)
+	}
 }
