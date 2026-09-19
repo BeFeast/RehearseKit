@@ -42,6 +42,11 @@ const DefaultOfferQuery = "gpu_ram>=12 num_gpus=1 dph<0.35 reliability>0.95 inet
 // DefaultLabel marks instances created by the scaler.
 const DefaultLabel = "rk-gpu-scaler"
 
+// destroyGrace is how long after a destroy an instance that vast still
+// lists is treated as "destroy again" rather than as a foreign orphan or an
+// adoptable leftover (vast's listing lags, and a destroy can be refused).
+const destroyGrace = time.Hour
+
 // StateInstance is the instance we are paying for.
 type StateInstance struct {
 	ID        int64     `json:"id"`
@@ -267,16 +272,37 @@ func (s *Scaler) Tick(ctx context.Context) {
 	s.ensureTunnel(o.Listed)
 }
 
+// recentlyDestroyed reports whether id was destroyed within destroyGrace.
+func (s *Scaler) recentlyDestroyed(id int64) bool {
+	now := s.now()
+	for i := len(s.state.History) - 1; i >= 0; i-- {
+		r := s.state.History[i]
+		if r.ID == id && now.Sub(r.DestroyedAt) < destroyGrace {
+			return true
+		}
+	}
+	return false
+}
+
 // reconcile handles instances carrying our label that the state does not
-// know: with no instance in the state the single one is adopted (a lost
+// know. One we destroyed recently but vast still lists is destroyed again.
+// Otherwise, with no instance in the state, a single one is adopted (a lost
 // state file must not leave a GPU billing); anything else is an orphan and
 // is destroyed. Instances without our label are never touched.
 func (s *Scaler) reconcile(ctx context.Context, instances []Instance) {
 	var ours []Instance
 	for _, in := range instances {
-		if in.Label == s.cfg.Label {
-			ours = append(ours, in)
+		if in.Label != s.cfg.Label {
+			continue
 		}
+		if s.recentlyDestroyed(in.ID) && (s.state.Instance == nil || in.ID != s.state.Instance.ID) {
+			s.log.Warn("scaler: destroyed instance is still listed; destroying again", "instance", in.ID, "status", in.Status)
+			if err := s.vast.DestroyInstance(ctx, in.ID); err != nil {
+				s.log.Error("scaler: destroy again", "instance", in.ID, "err", err)
+			}
+			continue
+		}
+		ours = append(ours, in)
 	}
 	if s.state.Instance == nil && len(ours) == 1 {
 		in := ours[0]

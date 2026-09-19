@@ -23,6 +23,7 @@ type fakeVast struct {
 	destroyErr error
 	showErr    error
 	nextID     int64
+	sticky     bool // destroyed instances stay listed (vast's listing lags)
 
 	created   []RentSpec
 	destroyed []int64
@@ -58,6 +59,9 @@ func (f *fakeVast) DestroyInstance(_ context.Context, id int64) error {
 		return f.destroyErr
 	}
 	f.destroyed = append(f.destroyed, id)
+	if f.sticky {
+		return nil
+	}
 	for i, in := range f.instances {
 		if in.ID == id {
 			f.instances = append(f.instances[:i], f.instances[i+1:]...)
@@ -337,6 +341,43 @@ func TestLostStateAdoptsLabelledInstance(t *testing.T) {
 	h.tick(10 * time.Minute)
 	if h.instanceID() != 0 || len(h.vast.destroyed) != 1 || h.vast.destroyed[0] != 55 {
 		t.Fatalf("adopted instance not destroyed when idle: %+v %v", h.s.state, h.vast.destroyed)
+	}
+}
+
+func TestStillListedAfterDestroyIsDestroyedAgainNotAdopted(t *testing.T) {
+	h := newHarness(t)
+	h.queue.st = gpu.QueueStats{Waiting: 1}
+	h.tick(0)
+	h.vast.setStatus(1, "running")
+	h.queue.st = gpu.QueueStats{}
+	h.vast.sticky = true
+	h.tick(30 * time.Second)
+	h.tick(10 * time.Minute)
+	if h.instanceID() != 0 || len(h.vast.destroyed) != 1 {
+		t.Fatalf("idle destroy: %+v %v", h.s.state, h.vast.destroyed)
+	}
+	// vast still lists it: destroy again, do not adopt, do not rent a second one.
+	h.tick(30 * time.Second)
+	if h.instanceID() != 0 {
+		t.Fatalf("re-adopted the destroyed instance: %+v", h.s.state.Instance)
+	}
+	if len(h.vast.destroyed) != 2 || h.vast.destroyed[1] != 1 {
+		t.Fatalf("not destroyed again: %v", h.vast.destroyed)
+	}
+	// A waiting job while it lingers rents a fresh instance (one instance
+	// in our state) and keeps destroying the lingering one.
+	h.queue.st = gpu.QueueStats{Waiting: 1}
+	h.tick(30 * time.Second)
+	if h.instanceID() != 2 || len(h.vast.destroyed) != 3 {
+		t.Fatalf("state %+v destroyed %v", h.s.state.Instance, h.vast.destroyed)
+	}
+	// Once vast drops it, nothing more happens to it.
+	h.vast.sticky = false
+	_ = h.vast.DestroyInstance(context.Background(), 1)
+	n := len(h.vast.destroyed)
+	h.tick(30 * time.Second)
+	if len(h.vast.destroyed) != n {
+		t.Fatalf("destroyed something after it was gone: %v", h.vast.destroyed)
 	}
 }
 

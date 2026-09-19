@@ -236,17 +236,22 @@ func (c *CLI) ShowInstances(ctx context.Context) ([]Instance, error) {
 	return list, nil
 }
 
-// DestroyInstance implements Vast.
+// DestroyInstance implements Vast. The CLI asks "Are you sure? [y/N]"
+// unless --yes is passed, and answers "Aborted." with exit status 0 when
+// stdin is not a terminal, so the output is checked as well as the status.
 func (c *CLI) DestroyInstance(ctx context.Context, id int64) error {
-	out, err := c.run(ctx, "destroy", "instance", strconv.FormatInt(id, 10))
+	out, err := c.run(ctx, "destroy", "instance", strconv.FormatInt(id, 10), "--yes")
 	if err != nil {
 		return err
 	}
+	if s := string(out); strings.Contains(s, "Aborted") || strings.Contains(s, "[y/N]") {
+		return fmt.Errorf("vastai destroy instance %d: not confirmed: %s", id, truncate(strings.TrimSpace(s), 200))
+	}
 	var resp struct {
-		Success bool   `json:"success"`
+		Success *bool  `json:"success"`
 		Msg     string `json:"msg"`
 	}
-	if json.Unmarshal(out, &resp) == nil && !resp.Success {
+	if len(out) > 0 && json.Unmarshal(out, &resp) == nil && resp.Success != nil && !*resp.Success {
 		return fmt.Errorf("vastai destroy instance %d: %s", id, resp.Msg)
 	}
 	return nil
