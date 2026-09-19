@@ -83,6 +83,12 @@ func TestClientIP(t *testing.T) {
 		{"xff chain uses rightmost", "10.0.0.1:1", map[string]string{"X-Forwarded-For": "1.1.1.1, 2.2.2.2, 198.51.100.7"}, "198.51.100.7"},
 		{"xff empty falls through", "10.0.0.1:1", map[string]string{"X-Forwarded-For": " ", "X-Real-IP": "198.51.100.8"}, "198.51.100.8"},
 		{"x-real-ip", "10.0.0.1:1", map[string]string{"X-Real-IP": "198.51.100.9"}, "198.51.100.9"},
+		{"loopback proxy", "127.0.0.1:1", map[string]string{"X-Forwarded-For": "198.51.100.7"}, "198.51.100.7"},
+		{"v6 loopback proxy", "[::1]:1", map[string]string{"X-Real-IP": "198.51.100.7"}, "198.51.100.7"},
+		{"cgnat-ish 172.16", "172.16.4.4:1", map[string]string{"X-Forwarded-For": "198.51.100.7"}, "198.51.100.7"},
+		{"public peer ignores xff", "203.0.113.5:1", map[string]string{"X-Forwarded-For": "198.51.100.7"}, "203.0.113.5"},
+		{"public peer ignores x-real-ip", "203.0.113.5:1", map[string]string{"X-Real-IP": "198.51.100.7"}, "203.0.113.5"},
+		{"unix socket peer ignores xff", "@", map[string]string{"X-Forwarded-For": "198.51.100.7"}, "@"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

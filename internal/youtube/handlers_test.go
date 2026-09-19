@@ -80,6 +80,10 @@ func (e *testEnv) post(t *testing.T, body string, hdr ...string) (*httptest.Resp
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "203.0.113.5:1234"
 	for i := 0; i+1 < len(hdr); i += 2 {
+		if hdr[i] == "RemoteAddr" {
+			req.RemoteAddr = hdr[i+1]
+			continue
+		}
 		req.Header.Set(hdr[i], hdr[i+1])
 	}
 	rec := httptest.NewRecorder()
@@ -266,8 +270,18 @@ func TestPreviewRateLimit(t *testing.T) {
 	if ra := rec.Header().Get("Retry-After"); ra == "" || ra == "0" {
 		t.Fatalf("Retry-After=%q", ra)
 	}
-	// Another client (via proxy header) is unaffected; a bad URL never costs a token.
-	rec, _ = e.post(t, body, "X-Forwarded-For", "198.51.100.7")
+	// A public peer cannot mint a fresh bucket by spoofing proxy headers.
+	rec, out = e.post(t, body, "X-Forwarded-For", "198.51.100.7")
+	wantError(t, rec, out, 429, "rate_limited")
+	rec, out = e.post(t, body, "X-Real-IP", "198.51.100.8")
+	wantError(t, rec, out, 429, "rate_limited")
+	// Behind the proxy (private peer) the forwarded client is its own bucket.
+	rec, _ = e.post(t, body, "RemoteAddr", "10.0.0.2:5555", "X-Forwarded-For", "198.51.100.7")
+	if rec.Code != 200 {
+		t.Fatalf("other client behind proxy got %d", rec.Code)
+	}
+	// A different direct peer is unaffected; a bad URL never costs a token.
+	rec, _ = e.post(t, body, "RemoteAddr", "203.0.113.6:1")
 	if rec.Code != 200 {
 		t.Fatalf("other client got %d", rec.Code)
 	}

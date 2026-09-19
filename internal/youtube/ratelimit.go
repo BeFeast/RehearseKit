@@ -78,11 +78,22 @@ func (l *limiter) maybeSweep(now time.Time) {
 	}
 }
 
-// clientIP identifies the caller for rate limiting. Behind a reverse proxy
-// (the deployment shape; auth already trusts X-Forwarded-Proto) the proxy
+// clientIP identifies the caller for rate limiting. X-Forwarded-For /
+// X-Real-IP are honoured only when the socket peer is a private, loopback or
+// link-local address, i.e. plausibly the reverse proxy in front of rk (the
+// deployment shape; auth already trusts X-Forwarded-Proto). The proxy
 // appends the real client to X-Forwarded-For, so the rightmost entry is the
-// address the proxy saw. Without those headers the socket peer is used.
+// address it saw. A request arriving directly from a public address is
+// keyed by that address whatever headers it carries, so spoofing cannot
+// mint fresh buckets.
 func clientIP(r *http.Request) string {
+	peer := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(peer); err == nil {
+		peer = host
+	}
+	if !trustedPeer(peer) {
+		return peer
+	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")
 		if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
@@ -92,9 +103,13 @@ func clientIP(r *http.Request) string {
 	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
 		return ip
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+	return peer
+}
+
+func trustedPeer(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
 	}
-	return host
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }

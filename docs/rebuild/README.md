@@ -110,7 +110,9 @@ before `yt-dlp --dump-single-json --no-playlist --skip-download` runs (20 s
 timeout, at most 4 processes at once). No session is needed. Successful
 lookups are cached in memory (100 entries, 10 min, keyed by video id) and
 each client IP gets 10 requests/min (`429 rate_limited` with `Retry-After`;
-behind a proxy the rightmost `X-Forwarded-For` hop is the client). Errors:
+`X-Forwarded-For`/`X-Real-IP` are honoured only when the peer is a private or
+loopback address, i.e. the reverse proxy, and the rightmost hop is the
+client). Errors:
 `400 invalid_url`, `422 youtube_unavailable` (private/removed/geo-blocked,
 message from yt-dlp), `504 youtube_timeout`, `501 youtube_unsupported` when
 `yt-dlp` is not on `PATH` - `/api/v1/config` reports that as
