@@ -1,0 +1,21 @@
+# Reference compose for a single-host deployment (TrueNAS): API + SPA and the
+# CPU worker share one image and one data volume; Postgres is external.
+name: ok-rehearsekit-v2
+services:
+  rk:
+    image: rk:local
+    build: {context: ../.., dockerfile: deploy/rk/Dockerfile}
+    container_name: rk-v2
+    restart: unless-stopped
+    env_file: .env
+    ports: ["30080:8080"]
+    volumes: ["${RK_DATA_HOST_DIR:-./data}:/data"]
+    healthcheck: {test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz')"], interval: 30s, timeout: 5s, retries: 3}
+  rk-worker:
+    image: rk:local
+    container_name: rk-v2-worker
+    restart: unless-stopped
+    env_file: .env
+    command: ["worker"]
+    volumes: ["${RK_DATA_HOST_DIR:-./data}:/data"]
+    depends_on: [rk]
