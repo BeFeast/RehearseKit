@@ -1,25 +1,36 @@
 // Package dawproject writes a DAWproject 1.0 archive
 // (https://github.com/bitwig/dawproject): a zip holding project.xml,
 // metadata.xml and the referenced audio files. One audio track per stem,
-// each with a single clip spanning the song, warped linearly from seconds
-// onto the beat grid; a master track; the detected tempo in Transport.
+// each with a single clip spanning the song, warped from seconds onto the
+// beat grid; a master track; the tempo in Transport.
 //
-// When the tempo is unknown the project is written at 120 BPM (the format
-// requires a value) and metadata.xml carries a Comment saying so; the
-// warps still map the whole file onto the corresponding number of beats,
-// so audio plays at the original speed regardless.
+// Without a grid (Project.Grid nil) the clip is warped linearly from the
+// single detected tempo; when the tempo is unknown the project is written
+// at 120 BPM (the format requires a value) and metadata.xml carries a
+// Comment saying so. The warps map the whole file onto the corresponding
+// number of beats either way, so audio plays at the original speed.
+//
+// With a grid the project carries the transcription: a warp per beat, a
+// stepped TempoAutomation (Bitwig form: two linear points per beat), a
+// TimeSignatureAutomation when the numerator changes, Markers, and one
+// notes track per transcribed stem. Element order in Arrangement follows
+// the schema: Lanes, Markers, TempoAutomation, TimeSignatureAutomation.
 package dawproject
 
 import (
 	"archive/zip"
 	"bytes"
+	"compress/flate"
 	"encoding/xml"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BeFeast/RehearseKit/internal/pipeline/grid"
 )
 
 // DefaultBPM is used in project.xml when no tempo was detected.
@@ -31,6 +42,29 @@ type Stem struct {
 	Path string // local WAV file to copy into the archive
 	// Duration in seconds; when 0 Project.DurationSeconds is used.
 	Duration float64
+}
+
+// Marker is a named position in beats.
+type Marker struct {
+	Beat  float64
+	Name  string
+	Color string
+}
+
+// Note is one note event; Beat and Duration are project-absolute beats.
+type Note struct {
+	Beat     float64
+	Duration float64
+	Key      int
+	Velocity float64 // 0..1
+}
+
+// NoteTrack is a notes track for a transcribed stem.
+type NoteTrack struct {
+	Stem    string // colour and id come from the stem name
+	Name    string // track name; default "<Stem> MIDI"
+	Channel int    // MIDI channel written on every note (0..15; 9 for drums)
+	Notes   []Note
 }
 
 // Project describes the archive to write.
@@ -46,6 +80,13 @@ type Project struct {
 	Generator string
 	// Version of the generator (default "rk").
 	GeneratorVersion string
+
+	// Grid, when set, replaces BPM as the source of the tempo map.
+	Grid *grid.Map
+	// Markers are written only when non-empty.
+	Markers []Marker
+	// NoteTracks are appended after the audio tracks, before the master.
+	NoteTracks []NoteTrack
 }
 
 // Track colours, from the legacy generator.
@@ -61,7 +102,8 @@ var stemColors = map[string]string{
 func f6(v float64) string { return strconv.FormatFloat(v, 'f', 6, 64) }
 
 // XML model. Element and attribute order follow the reference exports so
-// strict readers (Cubase) are happy.
+// strict readers (Cubase) are happy. New optional elements are pointers
+// with omitempty so the flag-off output is unchanged byte for byte.
 
 type xmlProject struct {
 	XMLName     xml.Name       `xml:"Project"`
@@ -129,8 +171,11 @@ type xmlBoolParam struct {
 }
 
 type xmlArrangement struct {
-	ID    string   `xml:"id,attr"`
-	Lanes xmlLanes `xml:"Lanes"`
+	ID                      string      `xml:"id,attr"`
+	Lanes                   xmlLanes    `xml:"Lanes"`
+	Markers                 *xmlMarkers `xml:"Markers,omitempty"`
+	TempoAutomation         *xmlPoints  `xml:"TempoAutomation,omitempty"`
+	TimeSignatureAutomation *xmlPoints  `xml:"TimeSignatureAutomation,omitempty"`
 }
 
 type xmlLanes struct {
@@ -147,11 +192,12 @@ type xmlClips struct {
 }
 
 type xmlClip struct {
-	Time      string   `xml:"time,attr"`
-	Duration  string   `xml:"duration,attr"`
-	PlayStart string   `xml:"playStart,attr"`
-	Name      string   `xml:"name,attr"`
-	Warps     xmlWarps `xml:"Warps"`
+	Time      string    `xml:"time,attr"`
+	Duration  string    `xml:"duration,attr"`
+	PlayStart string    `xml:"playStart,attr"`
+	Name      string    `xml:"name,attr"`
+	Warps     *xmlWarps `xml:"Warps,omitempty"`
+	Notes     *xmlNotes `xml:"Notes,omitempty"`
 }
 
 type xmlWarps struct {
@@ -176,6 +222,57 @@ type xmlFile struct {
 type xmlWarp struct {
 	Time        string `xml:"time,attr"`
 	ContentTime string `xml:"contentTime,attr"`
+}
+
+type xmlNotes struct {
+	ID    string    `xml:"id,attr"`
+	Notes []xmlNote `xml:"Note"`
+}
+
+type xmlNote struct {
+	Time     string `xml:"time,attr"`
+	Duration string `xml:"duration,attr"`
+	Channel  int    `xml:"channel,attr"`
+	Key      int    `xml:"key,attr"`
+	Vel      string `xml:"vel,attr"`
+	Rel      string `xml:"rel,attr"`
+}
+
+type xmlMarkers struct {
+	ID      string      `xml:"id,attr"`
+	Markers []xmlMarker `xml:"Marker"`
+}
+
+type xmlMarker struct {
+	Time  string `xml:"time,attr"`
+	Name  string `xml:"name,attr"`
+	Color string `xml:"color,attr,omitempty"`
+}
+
+// xmlPoints is TempoAutomation / TimeSignatureAutomation: Target first,
+// then points of one kind.
+type xmlPoints struct {
+	Unit    string            `xml:"unit,attr,omitempty"`
+	ID      string            `xml:"id,attr"`
+	Target  xmlTarget         `xml:"Target"`
+	Real    []xmlRealPoint    `xml:"RealPoint,omitempty"`
+	TimeSig []xmlTimeSigPoint `xml:"TimeSignaturePoint,omitempty"`
+}
+
+type xmlTarget struct {
+	Parameter string `xml:"parameter,attr"`
+}
+
+type xmlRealPoint struct {
+	Time          string `xml:"time,attr"`
+	Value         string `xml:"value,attr"`
+	Interpolation string `xml:"interpolation,attr"`
+}
+
+type xmlTimeSigPoint struct {
+	Time        string `xml:"time,attr"`
+	Numerator   int    `xml:"numerator,attr"`
+	Denominator int    `xml:"denominator,attr"`
 }
 
 type xmlMetaData struct {
@@ -205,6 +302,9 @@ func (p *Project) defaults() {
 
 // bpm returns the tempo to write and whether it was detected.
 func (p *Project) bpm() (float64, bool) {
+	if p.Grid != nil {
+		return p.Grid.BPM(), true
+	}
 	if p.BPM != nil && *p.BPM > 0 {
 		return *p.BPM, true
 	}
@@ -222,47 +322,103 @@ func TrackName(stem string) string {
 // AudioPath is the archive path of a stem.
 func AudioPath(stem string) string { return "audio/" + stem + ".wav" }
 
+// beat maps seconds to project beats: the grid when present, else the
+// single tempo.
+func (p *Project) beat(sec, bpm float64) float64 {
+	if p.Grid != nil {
+		return p.Grid.Beat(sec)
+	}
+	return sec * bpm / 60
+}
+
+func channel(id, dest string, channels int) xmlChannel {
+	return xmlChannel{
+		AudioChannels: channels, Destination: dest, Role: "regular", Solo: false, ID: id,
+		Mute:   xmlBoolParam{Value: false, ID: id + "-mute", Name: "Mute"},
+		Pan:    xmlRealParam{Max: f6(1), Min: f6(0), Unit: "normalized", Value: f6(0.5), ID: id + "-pan", Name: "Pan"},
+		Volume: xmlRealParam{Max: f6(2), Min: f6(0), Unit: "linear", Value: f6(1), ID: id + "-volume", Name: "Volume"},
+	}
+}
+
 // ProjectXML renders project.xml.
 func ProjectXML(p Project) ([]byte, error) {
 	p.defaults()
 	bpm, _ := p.bpm()
+	numerator := 4
+	if p.Grid != nil {
+		numerator = p.Grid.Numerator()
+	}
 	doc := xmlProject{
 		Version:     "1.0",
 		Application: xmlApplication{Name: p.Generator, Version: p.GeneratorVersion},
 		Transport: xmlTransport{
 			Tempo:         xmlRealParam{Max: f6(999), Min: f6(20), Unit: "bpm", Value: f6(bpm), ID: "tempo", Name: "Tempo"},
-			TimeSignature: xmlTimeSigParam{Denominator: 4, Numerator: 4, ID: "timesig"},
+			TimeSignature: xmlTimeSigParam{Denominator: grid.Denominator, Numerator: numerator, ID: "timesig"},
 		},
 		Arrangement: xmlArrangement{ID: "arrangement", Lanes: xmlLanes{TimeUnit: "beats", ID: "lanes"}},
 	}
 	const masterChannel = "master-channel"
+	// Every clip starts where second 0 falls on the grid (0 without one).
+	start := p.beat(0, bpm)
 	for _, st := range p.Stems {
 		trackID := "track-" + st.Name
 		chID := "channel-" + st.Name
 		doc.Structure.Tracks = append(doc.Structure.Tracks, xmlTrack{
 			ContentType: "audio", Loaded: true, ID: trackID, Name: TrackName(st.Name), Color: stemColors[st.Name],
-			Channel: xmlChannel{
-				AudioChannels: p.Channels, Destination: masterChannel, Role: "regular", Solo: false, ID: chID,
-				Mute:   xmlBoolParam{Value: false, ID: chID + "-mute", Name: "Mute"},
-				Pan:    xmlRealParam{Max: f6(1), Min: f6(0), Unit: "normalized", Value: f6(0.5), ID: chID + "-pan", Name: "Pan"},
-				Volume: xmlRealParam{Max: f6(2), Min: f6(0), Unit: "linear", Value: f6(1), ID: chID + "-volume", Name: "Volume"},
-			},
+			Channel: channel(chID, masterChannel, p.Channels),
 		})
 		dur := st.Duration
 		if dur <= 0 {
 			dur = p.DurationSeconds
 		}
-		beats := dur * bpm / 60
+		beats := p.beat(dur, bpm) - start
+		var warps []xmlWarp
+		if p.Grid != nil {
+			for _, w := range p.Grid.Warps(dur) {
+				warps = append(warps, xmlWarp{Time: f6(w.Beat - start), ContentTime: f6(w.Seconds)})
+			}
+		} else {
+			warps = []xmlWarp{{Time: f6(0), ContentTime: f6(0)}, {Time: f6(beats), ContentTime: f6(dur)}}
+		}
 		doc.Arrangement.Lanes.Lanes = append(doc.Arrangement.Lanes.Lanes, xmlLanes{
 			Track: trackID, ID: "lanes-" + st.Name,
 			Clips: &xmlClips{ID: "clips-" + st.Name, Clips: []xmlClip{{
-				Time: f6(0), Duration: f6(beats), PlayStart: f6(0), Name: TrackName(st.Name),
-				Warps: xmlWarps{
+				Time: f6(start), Duration: f6(beats), PlayStart: f6(0), Name: TrackName(st.Name),
+				Warps: &xmlWarps{
 					ContentTimeUnit: "seconds", TimeUnit: "beats",
 					Audio: xmlAudio{Algorithm: "stretch", Channels: p.Channels, Duration: f6(dur), SampleRate: p.SampleRate,
 						File: xmlFile{Path: AudioPath(st.Name)}},
-					Warps: []xmlWarp{{Time: f6(0), ContentTime: f6(0)}, {Time: f6(beats), ContentTime: f6(dur)}},
+					Warps: warps,
 				},
+			}}},
+		})
+	}
+	for _, nt := range p.NoteTracks {
+		name := nt.Name
+		if name == "" {
+			name = TrackName(nt.Stem) + " MIDI"
+		}
+		trackID := "track-" + nt.Stem + "-midi"
+		chID := "channel-" + nt.Stem + "-midi"
+		doc.Structure.Tracks = append(doc.Structure.Tracks, xmlTrack{
+			ContentType: "notes", Loaded: true, ID: trackID, Name: name, Color: stemColors[nt.Stem],
+			Channel: channel(chID, masterChannel, p.Channels),
+		})
+		end := p.beat(p.DurationSeconds, bpm)
+		notes := &xmlNotes{ID: "notes-" + nt.Stem}
+		for _, n := range nt.Notes {
+			notes.Notes = append(notes.Notes, xmlNote{
+				Time: f6(n.Beat - start), Duration: f6(n.Duration), Channel: nt.Channel, Key: n.Key,
+				Vel: f6(clamp01(n.Velocity)), Rel: f6(0.5),
+			})
+			if e := n.Beat + n.Duration; e > end {
+				end = e
+			}
+		}
+		doc.Arrangement.Lanes.Lanes = append(doc.Arrangement.Lanes.Lanes, xmlLanes{
+			Track: trackID, ID: "lanes-" + nt.Stem + "-midi",
+			Clips: &xmlClips{ID: "clips-" + nt.Stem + "-midi", Clips: []xmlClip{{
+				Time: f6(start), Duration: f6(end - start), PlayStart: f6(0), Name: name, Notes: notes,
 			}}},
 		})
 	}
@@ -275,16 +431,58 @@ func ProjectXML(p Project) ([]byte, error) {
 			Volume: xmlRealParam{Max: f6(2), Min: f6(0), Unit: "linear", Value: f6(1), ID: masterChannel + "-volume", Name: "Volume"},
 		},
 	})
+	if len(p.Markers) > 0 {
+		m := &xmlMarkers{ID: "markers"}
+		for _, mk := range p.Markers {
+			m.Markers = append(m.Markers, xmlMarker{Time: f6(mk.Beat), Name: mk.Name, Color: mk.Color})
+		}
+		doc.Arrangement.Markers = m
+	}
+	if p.Grid != nil {
+		if pts := p.Grid.TempoPoints(); len(pts) > 0 {
+			ta := &xmlPoints{Unit: "bpm", ID: "tempo-automation", Target: xmlTarget{Parameter: "tempo"}}
+			for _, pt := range pts {
+				ta.Real = append(ta.Real, xmlRealPoint{Time: f6(pt.Beat), Value: f6(pt.BPM), Interpolation: "linear"})
+			}
+			doc.Arrangement.TempoAutomation = ta
+		}
+		if sigs := p.Grid.TimeSignatures(); len(sigs) > 1 {
+			ts := &xmlPoints{ID: "timesig-automation", Target: xmlTarget{Parameter: "timesig"}}
+			for _, s := range sigs {
+				ts.TimeSig = append(ts.TimeSig, xmlTimeSigPoint{Time: f6(s.Beat), Numerator: s.Numerator, Denominator: s.Denominator})
+			}
+			doc.Arrangement.TimeSignatureAutomation = ts
+		}
+	}
 	return marshal(doc)
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 // MetadataXML renders metadata.xml.
 func MetadataXML(p Project) ([]byte, error) {
 	p.defaults()
 	m := xmlMetaData{Title: p.Name, Year: strconv.Itoa(p.Year)}
-	if bpm, ok := p.bpm(); !ok {
+	switch bpm, ok := p.bpm(); {
+	case p.Grid != nil:
+		lo, hi := p.Grid.Range()
+		if p.Grid.Constant {
+			m.Comment = fmt.Sprintf("Tempo map from beat tracking: %s BPM, constant. Generated by %s.", strconv.FormatFloat(bpm, 'f', 2, 64), p.Generator)
+		} else {
+			m.Comment = fmt.Sprintf("Tempo map from beat tracking: %s BPM (%s–%s), tempo automation per beat. Generated by %s.",
+				strconv.FormatFloat(bpm, 'f', 2, 64), strconv.FormatFloat(lo, 'f', 1, 64), strconv.FormatFloat(hi, 'f', 1, 64), p.Generator)
+		}
+	case !ok:
 		m.Comment = fmt.Sprintf("Tempo was not detected with enough confidence; the project tempo is a placeholder of %g BPM. Generated by %s.", bpm, p.Generator)
-	} else {
+	default:
 		m.Comment = fmt.Sprintf("Detected tempo %s BPM. Generated by %s.", strconv.FormatFloat(bpm, 'f', -1, 64), p.Generator)
 	}
 	return marshal(m)
@@ -305,6 +503,10 @@ func marshal(v any) ([]byte, error) {
 // Write streams the .dawproject archive to w: project.xml, metadata.xml
 // and audio/<name>.wav for each stem (stored, not deflated: WAV barely
 // compresses and DAWs read the audio directly).
+//
+// Entries are written with CreateRaw and sizes/CRC computed up front, so
+// no entry needs a data descriptor: Cubase's importer rejects archives
+// that use them (bitwig/dawproject#101). The WAVs are read twice.
 func Write(w io.Writer, p Project) error {
 	p.defaults()
 	proj, err := ProjectXML(p)
@@ -316,40 +518,77 @@ func Write(w io.Writer, p Project) error {
 		return err
 	}
 	zw := zip.NewWriter(w)
-	add := func(name string, data []byte) error {
-		f, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Deflate, Modified: time.Now()})
+	now := time.Now()
+	addDeflated := func(name string, data []byte) error {
+		var comp bytes.Buffer
+		fw, err := flate.NewWriter(&comp, flate.DefaultCompression)
 		if err != nil {
 			return err
 		}
-		_, err = f.Write(data)
+		if _, err := fw.Write(data); err != nil {
+			return err
+		}
+		if err := fw.Close(); err != nil {
+			return err
+		}
+		f, err := zw.CreateRaw(&zip.FileHeader{
+			Name: name, Method: zip.Deflate, Modified: now,
+			CRC32: crc32.ChecksumIEEE(data), CompressedSize64: uint64(comp.Len()), UncompressedSize64: uint64(len(data)),
+		})
+		if err != nil {
+			return err
+		}
+		_, err = f.Write(comp.Bytes())
 		return err
 	}
-	if err := add("project.xml", proj); err != nil {
+	if err := addDeflated("project.xml", proj); err != nil {
 		return err
 	}
-	if err := add("metadata.xml", meta); err != nil {
+	if err := addDeflated("metadata.xml", meta); err != nil {
 		return err
 	}
 	for _, st := range p.Stems {
 		if st.Path == "" {
 			continue
 		}
-		src, err := os.Open(st.Path)
-		if err != nil {
+		if err := addStored(zw, AudioPath(st.Name), st.Path, now); err != nil {
 			return err
 		}
-		f, err := zw.CreateHeader(&zip.FileHeader{Name: AudioPath(st.Name), Method: zip.Store, Modified: time.Now()})
-		if err != nil {
-			src.Close()
-			return err
-		}
-		if _, err := io.Copy(f, src); err != nil {
-			src.Close()
-			return err
-		}
-		src.Close()
 	}
 	return zw.Close()
+}
+
+// addStored copies a file into the archive uncompressed, after a first pass
+// for its size and CRC.
+func addStored(zw *zip.Writer, name, path string, now time.Time) error {
+	src, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	h := crc32.NewIEEE()
+	size, err := io.Copy(h, src)
+	if err != nil {
+		return err
+	}
+	if _, err := src.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	f, err := zw.CreateRaw(&zip.FileHeader{
+		Name: name, Method: zip.Store, Modified: now,
+		CRC32: h.Sum32(), CompressedSize64: uint64(size), UncompressedSize64: uint64(size),
+	})
+	if err != nil {
+		return err
+	}
+	n, err := io.Copy(f, src)
+	if err != nil {
+		return err
+	}
+	if n != size {
+		return fmt.Errorf("%s changed while archiving (%d of %d bytes)", path, n, size)
+	}
+	return nil
 }
 
 // WriteFile writes the archive to path via a temp file and rename.
