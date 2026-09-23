@@ -63,6 +63,7 @@ def write_json(path: str, obj) -> None:
     fd, tmp = tempfile.mkstemp(prefix=".", suffix=".json", dir=d)
     with os.fdopen(fd, "w") as f:
         json.dump(obj, f)
+    os.chmod(tmp, 0o644)  # mkstemp gives 0600; the agent reads it as the same user, humans may not
     os.replace(tmp, path)
 
 
