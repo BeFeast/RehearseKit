@@ -16,6 +16,7 @@ import (
 
 	"github.com/BeFeast/RehearseKit/internal/api/respond"
 	"github.com/BeFeast/RehearseKit/internal/jobs"
+	"github.com/BeFeast/RehearseKit/internal/pipeline/analysis"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/wavcheck"
 	"github.com/BeFeast/RehearseKit/internal/signed"
 	"github.com/BeFeast/RehearseKit/internal/storage"
@@ -109,6 +110,10 @@ type LeaseResponse struct {
 	UploadURLs       map[string]string `json:"upload_urls"`
 	ExpiresAt        time.Time         `json:"expires_at"`
 	HeartbeatSeconds int               `json:"heartbeat_seconds"`
+	// Transcribe and ArtifactURLs are present only on transcribe leases
+	// (offered to runners that sent X-Runner-Features: transcribe).
+	Transcribe   bool          `json:"transcribe,omitempty"`
+	ArtifactURLs *ArtifactURLs `json:"artifact_urls,omitempty"`
 }
 
 func (h *Handlers) lease(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +127,8 @@ func (h *Handlers) lease(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rid := runnerID(r, body.RunnerID)
-	l, j, err := h.store.Claim(r.Context(), rid)
+	caps := ParseFeatures(r.Header.Get(FeaturesHeader))
+	l, j, err := h.store.Claim(r.Context(), rid, caps)
 	if errors.Is(err, ErrNoJobs) {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -152,7 +158,24 @@ func (h *Handlers) lease(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.UploadURLs[name] = base + u
 	}
-	slog.Info("gpu lease", "lease", l.ID, "job", j.ID, "runner", rid, "model", model)
+	if j.Transcribe {
+		resp.Transcribe = true
+		a, err := h.signer.Sign(http.MethodPut, signed.AnalysisPath(j.ID), exp)
+		if err != nil {
+			respond.Fail(w, err)
+			return
+		}
+		resp.ArtifactURLs = &ArtifactURLs{Analysis: base + a, Notes: map[string]string{}}
+		for _, name := range jobs.TranscribeStems {
+			u, err := h.signer.Sign(http.MethodPut, signed.NotesPath(j.ID, name), exp)
+			if err != nil {
+				respond.Fail(w, err)
+				return
+			}
+			resp.ArtifactURLs.Notes[name] = base + u
+		}
+	}
+	slog.Info("gpu lease", "lease", l.ID, "job", j.ID, "runner", rid, "model", model, "transcribe", j.Transcribe)
 	respond.JSON(w, http.StatusOK, resp)
 }
 
@@ -194,16 +217,15 @@ func (h *Handlers) leaseErr(w http.ResponseWriter, err error) {
 		respond.Failf(w, http.StatusConflict, "job_gone", "the job is no longer waiting for separation (cancelled or finished); stop working on it")
 	case errors.Is(err, ErrBadStems):
 		respond.Failf(w, http.StatusBadRequest, "bad_stems", err.Error())
+	case errors.Is(err, ErrBadArtifacts):
+		respond.Failf(w, http.StatusBadRequest, "bad_artifacts", err.Error())
 	default:
 		respond.Fail(w, err)
 	}
 }
 
 func (h *Handlers) heartbeat(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		RunnerID string  `json:"runner_id"`
-		Progress float64 `json:"progress"`
-	}
+	var body HeartbeatRequest
 	if err := respond.DecodeJSON(r, &body); err != nil {
 		respond.Fail(w, err)
 		return
@@ -212,7 +234,11 @@ func (h *Handlers) heartbeat(w http.ResponseWriter, r *http.Request) {
 		respond.Failf(w, http.StatusBadRequest, "invalid_progress", "progress must be between 0 and 1")
 		return
 	}
-	l, err := h.store.Heartbeat(r.Context(), r.PathValue("id"), runnerID(r, body.RunnerID), body.Progress)
+	if body.Stage != "" && body.Stage != StageSeparating && body.Stage != StageTranscribing {
+		respond.Failf(w, http.StatusBadRequest, "invalid_stage", "stage must be separating or transcribing")
+		return
+	}
+	l, err := h.store.Heartbeat(r.Context(), r.PathValue("id"), runnerID(r, body.RunnerID), body.Progress, body.Stage)
 	if err != nil {
 		h.leaseErr(w, err)
 		return
@@ -221,15 +247,12 @@ func (h *Handlers) heartbeat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) complete(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		RunnerID string       `json:"runner_id"`
-		Stems    []StemReport `json:"stems"`
-	}
+	var body CompleteRequest
 	if err := respond.DecodeJSON(r, &body); err != nil {
 		respond.Fail(w, err)
 		return
 	}
-	err := h.store.Complete(r.Context(), r.PathValue("id"), runnerID(r, body.RunnerID), body.Stems, h.verifyStem)
+	err := h.store.Complete(r.Context(), r.PathValue("id"), runnerID(r, body.RunnerID), body.Stems, body.Artifacts, h.verifyStem, h.verifyArtifact)
 	if err != nil {
 		h.leaseErr(w, err)
 		return
@@ -238,10 +261,7 @@ func (h *Handlers) complete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) fail(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		RunnerID string `json:"runner_id"`
-		Error    string `json:"error"`
-	}
+	var body FailRequest
 	if err := respond.DecodeJSON(r, &body); err != nil {
 		respond.Fail(w, err)
 		return
@@ -255,6 +275,40 @@ func (h *Handlers) fail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusOK, map[string]any{"lease_id": r.PathValue("id"), "job_failed": failed})
+}
+
+// verifyArtifact checks an uploaded JSON artefact: size and checksum as
+// reported, and that it parses as analysis.json / notes.
+func (h *Handlers) verifyArtifact(_ context.Context, jobID string, a ArtifactReport) error {
+	var path string
+	var err error
+	if a.Name == ArtifactAnalysis {
+		path, err = h.layout.AnalysisPath(jobID)
+	} else {
+		path, err = h.layout.NotesPath(jobID, strings.TrimPrefix(a.Name, ArtifactNotesPrefix))
+	}
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("not uploaded: %w", err)
+	}
+	if int64(len(b)) != a.Bytes {
+		return fmt.Errorf("size %d, reported %d", len(b), a.Bytes)
+	}
+	if a.SHA256 != "" {
+		sum := sha256.Sum256(b)
+		if !strings.EqualFold(hex.EncodeToString(sum[:]), a.SHA256) {
+			return errors.New("checksum mismatch")
+		}
+	}
+	if a.Name == ArtifactAnalysis {
+		_, err = analysis.Parse(b)
+	} else {
+		_, err = analysis.ParseNotes(b)
+	}
+	return err
 }
 
 // verifyStem checks the uploaded file: size and checksum as reported, and

@@ -197,6 +197,13 @@ a 3/4 section, markers and note clips for checking a DAW by hand.
 holds the meter and tempo events derived from the same grid, track 1 the
 notes (channel 10 for drums).
 
+Rollout order for the transcription protocol on a live stack: runner image
+with the capability first (it ignores nothing new from an old server), then
+the server (additive migration, `transcribe` default false), then
+`RK_TRANSCRIBE_EMAILS` in the server env — while the live autoscaler still
+runs `:latest`, keep the list empty, or it would rent a runner that cannot
+claim the waiting transcribe job.
+
 Sweepers (in the worker process): expired GPU leases every 30 s, jobs stuck
 in a CPU stage with no event for 45 min every 5 min (→ failed), retention
 (`DELETE … WHERE expires_at < now()` + directory removal) every 10 min,
@@ -219,10 +226,11 @@ runner                                   rk serve
   ◀── {lease_id, job_id, model, stems, source_url, upload_urls{stem→PUT}, expires_at, heartbeat_seconds}
   GET  source_url (signed, 2 h) ────────▶ jobs/<id>/source.wav
   python -m demucs -n <model> --flac --int24 -d cuda
-  POST /gpu/lease/{id}/heartbeat {progress 0..1} ─▶ extends TTL, job progress 28–76 %
+  POST /gpu/lease/{id}/heartbeat {progress 0..1[, stage]} ─▶ extends TTL, job progress 28–76 %
   ffmpeg flac → 24-bit/48 kHz wav
   PUT  upload_urls[stem] (Content-Length ≤ 2 GiB) ─▶ jobs/<id>/stems/<stem>.wav (temp + rename)
-  POST /gpu/lease/{id}/complete {stems:[{name,bytes,sha256}]} ─▶ verify size/sha/WAV header → job finalizing
+  (transcribe lease) adapters → PUT artifact_urls.analysis / artifact_urls.notes[stem] (JSON ≤ 32 MiB)
+  POST /gpu/lease/{id}/complete {stems:[{name,bytes,sha256}][, artifacts:[…]]} ─▶ verify → job finalizing
   POST /gpu/lease/{id}/fail {error} ────▶ lease failed; job re-offered, or failed after 3 attempts
   GET  /api/v1/gpu/queue ───────────────▶ {waiting, active_leases, oldest_waiting_at} (autoscalers)
 ```
@@ -237,6 +245,30 @@ Signed URLs are `path?exp=<unix>&sig=<base64url HMAC-SHA256(method\npath\nexp)>`
 over `RK_SIGNING_KEY`; the method is part of the MAC so a GET link can not
 be replayed as a PUT. Served by `GET/HEAD /api/v1/signed/jobs/{id}/source`
 and `PUT /api/v1/signed/jobs/{id}/stems/{name}`.
+
+**Transcribe jobs** (`jobs.transcribe`, PR2) are offered only to runners
+that send `X-Runner-Features: transcribe` on the lease request; an older
+runner never leases one (`GET /gpu/queue` reports them as
+`waiting_transcribe`, a subset of `waiting`). The lease then carries
+`"transcribe": true` and `artifact_urls` (`analysis`, `notes{drums,bass,
+guitar,piano}` — signed PUTs to `/api/v1/signed/jobs/{id}/analysis` and
+`…/notes/{stem}`, stored as `jobs/<id>/analysis.json` and
+`notes/<stem>.json`); both fields are absent on plain leases, and the runner
+only adds `stage` (heartbeat) and `artifacts` (complete) on transcribe
+leases, so either side can be upgraded first. `complete` on a transcribe job
+must report the `analysis` artefact (the runner always writes it, even when
+every adapter failed) — otherwise `400 bad_artifacts` and the lease stays
+active. The runner squeezes separation into the lower half of the band and
+reports transcription at 0.60–0.93 with `stage: transcribing` ("Transcribing
+stems to MIDI..."). `RK_LOCAL_DEMUCS=1` refuses transcribe jobs (no adapters).
+
+Finalize then reads `analysis.json` (beat grid → `internal/pipeline/grid`,
+sections → markers, per-instrument status) and `notes/<stem>.json`, writes
+`midi/<stem>.mid` and the DAWproject with the tempo map and notes tracks;
+`package.zip` gains `midi/*.mid`, `analysis.json`, `notes/*.json`, and the
+README lists the tempo map and every instrument's status (a failed adapter
+is never silent). `jobs.detected_bpm`, `tempo.json` and the README's BPM stay
+librosa's single estimate; the project's tempo map comes from the grid.
 
 Leases live in `gpu_leases`; at most one is active per job (partial unique
 index, migration 0002). A lease that misses heartbeats for

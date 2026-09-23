@@ -14,6 +14,9 @@ type QueueStats struct {
 	Waiting int `json:"waiting"`
 	// ActiveLeases is the number of leases currently held by runners.
 	ActiveLeases int `json:"active_leases"`
+	// WaitingTranscribe counts the waiting jobs that need a transcribe-capable
+	// runner (a subset of Waiting).
+	WaitingTranscribe int `json:"waiting_transcribe"`
 	// OldestWaitingAt is when the oldest waiting job entered the queue
 	// (its started_at, or created_at); nil when nothing waits.
 	OldestWaitingAt *time.Time `json:"oldest_waiting_at,omitempty"`
@@ -33,8 +36,9 @@ func (s *Store) QueueStats(ctx context.Context) (QueueStats, error) {
 		)
 		SELECT (SELECT count(*) FROM waiting),
 		       (SELECT min(since) FROM waiting),
-		       (SELECT count(*) FROM gpu_leases WHERE state = 'active')`, s.MaxFailures).
-		Scan(&st.Waiting, &oldest, &st.ActiveLeases)
+		       (SELECT count(*) FROM gpu_leases WHERE state = 'active'),
+		       (SELECT count(*) FROM waiting w JOIN jobs j ON j.id = w.id WHERE j.transcribe)`, s.MaxFailures).
+		Scan(&st.Waiting, &oldest, &st.ActiveLeases, &st.WaitingTranscribe)
 	if err != nil {
 		return QueueStats{}, err
 	}

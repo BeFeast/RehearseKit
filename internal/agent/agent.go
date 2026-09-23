@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/BeFeast/RehearseKit/internal/gpu"
+	"github.com/BeFeast/RehearseKit/internal/jobs"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/demucs"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/wavcheck"
 )
@@ -48,6 +49,9 @@ type Config struct {
 	// SignedURLBase = APIURL). Defaults to on when APIURL points at a
 	// loopback address, which is what an ssh tunnel looks like.
 	RebaseSignedURLs bool
+	// Transcribe configures the beat grid + MIDI adapters; when Enabled the
+	// runner advertises the capability and is offered transcribe jobs.
+	Transcribe TranscribeConfig
 }
 
 // Agent runs the lease loop.
@@ -87,6 +91,23 @@ func New(cfg Config) (*Agent, error) {
 		}
 	} else if cfg.RebaseSignedURLs || apiIsLoopback(cfg.APIURL) {
 		cfg.SignedURLBase = cfg.APIURL
+	}
+	if cfg.Transcribe.Enabled {
+		if cfg.Transcribe.ToolsDir == "" {
+			return nil, errors.New("RK_TRANSCRIBE_TOOLS is required when transcription is enabled")
+		}
+		if cfg.Transcribe.Device == "" {
+			cfg.Transcribe.Device = cfg.Device
+		}
+		if cfg.Transcribe.GridTimeout <= 0 {
+			cfg.Transcribe.GridTimeout = 5 * time.Minute
+		}
+		if cfg.Transcribe.NotesTimeout <= 0 {
+			cfg.Transcribe.NotesTimeout = 15 * time.Minute
+		}
+		if cfg.Transcribe.SectionsTimeout <= 0 {
+			cfg.Transcribe.SectionsTimeout = 10 * time.Minute
+		}
 	}
 	return &Agent{cfg: cfg, http: &http.Client{}}, nil
 }
@@ -147,6 +168,16 @@ func (a *Agent) rebase(lease *gpu.LeaseResponse) error {
 			return err
 		}
 	}
+	if au := lease.ArtifactURLs; au != nil {
+		if au.Analysis, err = rebaseURL(a.cfg.SignedURLBase, au.Analysis); err != nil {
+			return err
+		}
+		for name, u := range au.Notes {
+			if au.Notes[name], err = rebaseURL(a.cfg.SignedURLBase, u); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -177,6 +208,11 @@ func (e *apiError) Error() string { return fmt.Sprintf("%d %s: %s", e.Status, e.
 
 // post sends JSON and decodes a JSON reply into out (may be nil).
 func (a *Agent) post(ctx context.Context, path string, body, out any) (int, error) {
+	return a.postH(ctx, path, body, out, nil)
+}
+
+// postH is post with extra request headers.
+func (a *Agent) postH(ctx context.Context, path string, body, out any, headers map[string]string) (int, error) {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -193,6 +229,9 @@ func (a *Agent) post(ctx context.Context, path string, body, out any) (int, erro
 	req.Header.Set(gpu.RunnerIDHeader, a.cfg.RunnerID)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := a.http.Do(req)
 	if err != nil {
@@ -219,7 +258,11 @@ func (a *Agent) post(ctx context.Context, path string, body, out any) (int, erro
 // RunOnce leases and processes one job. Returns false when none waits.
 func (a *Agent) RunOnce(ctx context.Context) (bool, error) {
 	var lease gpu.LeaseResponse
-	status, err := a.post(ctx, "/api/v1/gpu/lease", map[string]string{"runner_id": a.cfg.RunnerID}, &lease)
+	var headers map[string]string
+	if a.cfg.Transcribe.Enabled {
+		headers = map[string]string{gpu.FeaturesHeader: gpu.FeatureTranscribe}
+	}
+	status, err := a.postH(ctx, "/api/v1/gpu/lease", map[string]string{"runner_id": a.cfg.RunnerID}, &lease, headers)
 	if err != nil {
 		return false, fmt.Errorf("lease: %w", err)
 	}
@@ -230,7 +273,11 @@ func (a *Agent) RunOnce(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("lease: %w", err)
 	}
 	log := slog.With("lease", lease.LeaseID, "job", lease.JobID, "model", lease.Model)
-	log.Info("leased job", "stems", lease.Stems, "expires_at", lease.ExpiresAt)
+	if lease.Transcribe && !a.cfg.Transcribe.Enabled {
+		// The server only offers these to runners that asked for them.
+		return true, errors.New("server offered a transcribe lease to a runner without the capability")
+	}
+	log.Info("leased job", "stems", lease.Stems, "expires_at", lease.ExpiresAt, "transcribe", lease.Transcribe)
 	start := time.Now()
 	err = a.process(ctx, lease, log)
 	if err != nil {
@@ -242,7 +289,7 @@ func (a *Agent) RunOnce(ctx context.Context) (bool, error) {
 		bg, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if _, ferr := a.post(bg, "/api/v1/gpu/lease/"+lease.LeaseID+"/fail",
-			map[string]string{"runner_id": a.cfg.RunnerID, "error": truncate(err.Error(), 1900)}, nil); ferr != nil {
+			gpu.FailRequest{RunnerID: a.cfg.RunnerID, Error: truncate(err.Error(), 1900)}, nil); ferr != nil {
 			log.Error("report failure", "err", ferr)
 		}
 		return true, err
@@ -270,6 +317,8 @@ func (a *Agent) process(ctx context.Context, lease gpu.LeaseResponse, log *slog.
 
 	// Heartbeats carry the latest progress and detect a cancelled job.
 	var progress atomic.Int64 // progress * 1000
+	var stage atomic.Value    // "" or gpu.StageTranscribing
+	stage.Store("")
 	hctx, stopHeartbeat := context.WithCancel(ctx)
 	defer stopHeartbeat()
 	gone := make(chan struct{})
@@ -288,8 +337,10 @@ func (a *Agent) process(ctx context.Context, lease gpu.LeaseResponse, log *slog.
 			}
 			p := float64(progress.Load()) / 1000
 			hb, cancel := context.WithTimeout(hctx, 20*time.Second)
+			// Typed body: "stage" is omitted unless set, so an older
+			// server (DisallowUnknownFields) keeps accepting heartbeats.
 			_, err := a.post(hb, "/api/v1/gpu/lease/"+lease.LeaseID+"/heartbeat",
-				map[string]any{"runner_id": a.cfg.RunnerID, "progress": p}, nil)
+				gpu.HeartbeatRequest{RunnerID: a.cfg.RunnerID, Progress: p, Stage: stage.Load().(string)}, nil)
 			cancel()
 			var ae *apiError
 			if errors.As(err, &ae) && (ae.Status == http.StatusConflict || ae.Status == http.StatusGone) {
@@ -329,6 +380,14 @@ func (a *Agent) process(ctx context.Context, lease gpu.LeaseResponse, log *slog.
 	}
 	progress.Store(50) // 5 %
 
+	// Progress bands. The server only moves progress forward, so on a
+	// transcribe lease separation and the stem upload are squeezed into
+	// the lower half and transcription gets 0.60–0.93.
+	band := struct{ sep, conv, up, tr float64 }{sep: 0.85, conv: 0.93, up: 0.99, tr: 0}
+	if lease.Transcribe {
+		band = struct{ sep, conv, up, tr float64 }{sep: 0.45, conv: 0.52, up: 0.58, tr: 0.60}
+	}
+
 	// 2. Separate.
 	sepStart := time.Now()
 	lastLogged := -1
@@ -336,7 +395,7 @@ func (a *Agent) process(ctx context.Context, lease gpu.LeaseResponse, log *slog.
 		Python: a.cfg.Python, Model: lease.Model, Device: a.cfg.Device, Input: src,
 		OutDir: filepath.Join(work, "out"), Extra: a.cfg.DemucsExtra,
 	}, func(p float64) {
-		progress.Store(int64((0.05 + 0.85*p) * 1000))
+		progress.Store(int64((0.05 + band.sep*p) * 1000))
 		if step := int(p * 10); step > lastLogged {
 			lastLogged = step
 			log.Info("demucs progress", "pct", step*10, "elapsed", time.Since(sepStart).Round(time.Second))
@@ -346,14 +405,14 @@ func (a *Agent) process(ctx context.Context, lease gpu.LeaseResponse, log *slog.
 		return wrap(err)
 	}
 	log.Info("demucs finished", "took", time.Since(sepStart).Round(time.Second))
-	progress.Store(900)
+	progress.Store(int64((0.05 + band.sep) * 1000))
 
 	// 3. FLAC → 24-bit/48 kHz WAV.
 	stemsDir := filepath.Join(work, "stems")
 	if err := demucs.ConvertStems(wctx, out, stemsDir, lease.Stems); err != nil {
 		return wrap(err)
 	}
-	progress.Store(930)
+	progress.Store(int64(band.conv * 1000))
 
 	// 4. Upload.
 	var reports []gpu.StemReport
@@ -368,16 +427,58 @@ func (a *Agent) process(ctx context.Context, lease gpu.LeaseResponse, log *slog.
 			return wrap(fmt.Errorf("upload %s: %w", name, err))
 		}
 		reports = append(reports, rep)
-		progress.Store(int64((0.93 + 0.06*float64(i+1)/float64(len(lease.Stems))) * 1000))
+		progress.Store(int64((band.conv + (band.up-band.conv)*float64(i+1)/float64(len(lease.Stems))) * 1000))
 		log.Info("uploaded stem", "stem", name, "bytes", rep.Bytes)
 	}
 
-	// 5. Complete.
+	// 5. Transcribe (grid + notes) and upload the artefacts. Adapter
+	// failures are recorded in analysis.json, never reported as /fail.
+	var artifacts []gpu.ArtifactReport
+	if lease.Transcribe && lease.ArtifactURLs != nil {
+		stage.Store(gpu.StageTranscribing)
+		progress.Store(int64(band.tr * 1000))
+		stemPaths := map[string]string{}
+		for _, name := range lease.Stems {
+			stemPaths[name] = filepath.Join(stemsDir, name+".wav")
+		}
+		trStart := time.Now()
+		res := a.transcribe(wctx, lease, src, stemPaths, work, log, func(f float64) {
+			progress.Store(int64((band.tr + (0.93-band.tr)*f) * 1000))
+		})
+		if wctx.Err() != nil {
+			return wrap(wctx.Err())
+		}
+		log.Info("transcription finished", "took", time.Since(trStart).Round(time.Second))
+		rep, err := a.uploadArtifact(wctx, lease.ArtifactURLs.Analysis, gpu.ArtifactAnalysis, res.Analysis)
+		if err != nil {
+			return wrap(fmt.Errorf("upload analysis.json: %w", err))
+		}
+		artifacts = append(artifacts, rep)
+		for _, stem := range jobs.TranscribeStems {
+			b, ok := res.Notes[stem]
+			if !ok {
+				continue
+			}
+			u, ok := lease.ArtifactURLs.Notes[stem]
+			if !ok {
+				log.Warn("lease has no notes URL", "stem", stem)
+				continue
+			}
+			rep, err := a.uploadArtifact(wctx, u, gpu.ArtifactNotesPrefix+stem, b)
+			if err != nil {
+				return wrap(fmt.Errorf("upload notes/%s: %w", stem, err))
+			}
+			artifacts = append(artifacts, rep)
+		}
+		progress.Store(990)
+	}
+
+	// 6. Complete. Typed body: "artifacts" is omitted when empty.
 	stopHeartbeat()
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	if _, err := a.post(cctx, "/api/v1/gpu/lease/"+lease.LeaseID+"/complete",
-		map[string]any{"runner_id": a.cfg.RunnerID, "stems": reports}, nil); err != nil {
+		gpu.CompleteRequest{RunnerID: a.cfg.RunnerID, Stems: reports, Artifacts: artifacts}, nil); err != nil {
 		return fmt.Errorf("complete: %w", err)
 	}
 	return nil

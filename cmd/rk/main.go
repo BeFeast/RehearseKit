@@ -232,13 +232,28 @@ func runGPUAgent(args []string) error {
 	extra := fs.String("demucs-args", os.Getenv("RK_DEMUCS_ARGS"), "extra demucs arguments, space separated (or RK_DEMUCS_ARGS), e.g. \"--segment 7\"")
 	signedBase := fs.String("signed-url-base", os.Getenv("RK_SIGNED_URL_BASE"), "replace scheme://host of the signed source/upload URLs, e.g. http://127.0.0.1:18080 behind an ssh tunnel (or RK_SIGNED_URL_BASE)")
 	rebase := fs.Bool("rebase-urls", os.Getenv("RK_REBASE_SIGNED_URLS") == "1", "rebase the signed URLs onto --api (or RK_REBASE_SIGNED_URLS=1; default on when --api is a loopback address)")
+	transcribe := fs.Bool("transcribe", os.Getenv("RK_TRANSCRIBE") == "1", "advertise and run beat grid + MIDI transcription (or RK_TRANSCRIBE=1; needs --transcribe-tools)")
+	transcribeTools := fs.String("transcribe-tools", os.Getenv("RK_TRANSCRIBE_TOOLS"), "directory with the adapter scripts, tools/transcribe (or RK_TRANSCRIBE_TOOLS)")
+	transcribeDevice := fs.String("transcribe-device", os.Getenv("RK_TRANSCRIBE_DEVICE"), "device for the adapters (or RK_TRANSCRIBE_DEVICE; default --device)")
+	gridTimeout := fs.Duration("grid-timeout", envDuration("RK_TRANSCRIBE_TIMEOUT_GRID", 5*time.Minute), "beat tracker timeout (or RK_TRANSCRIBE_TIMEOUT_GRID)")
+	notesTimeout := fs.Duration("notes-timeout", envDuration("RK_TRANSCRIBE_TIMEOUT_NOTES", 15*time.Minute), "per-instrument transcription timeout (or RK_TRANSCRIBE_TIMEOUT_NOTES)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	adapters := map[string]string{}
+	for _, k := range []string{"grid", "drums", "bass", "guitar", "piano", "sections"} {
+		if v := os.Getenv("RK_ADAPTER_" + strings.ToUpper(k)); v != "" {
+			adapters[k] = v
+		}
 	}
 	a, err := agent.New(agent.Config{
 		APIURL: *apiURL, Token: *token, RunnerID: *runnerID, Python: *python, Device: *device,
 		WorkDir: *workDir, Poll: *poll, Once: *once, DemucsExtra: strings.Fields(*extra), SignedURLBase: *signedBase,
 		RebaseSignedURLs: *rebase,
+		Transcribe: agent.TranscribeConfig{
+			Enabled: *transcribe, ToolsDir: *transcribeTools, Device: *transcribeDevice, Adapters: adapters,
+			GridTimeout: *gridTimeout, NotesTimeout: *notesTimeout,
+		},
 	})
 	if err != nil {
 		return err

@@ -36,6 +36,10 @@ const (
 	constantSpread = 0.02
 	// dropRatio: an interval shorter than dropRatio*median is a doubled beat.
 	dropRatio = 0.5
+	// halfRatio: two consecutive intervals both shorter than halfRatio*median
+	// that add up to about one median interval are a double-time beat
+	// between two real ones (busy passages make trackers halve the beat).
+	halfRatio = 0.7
 	// fillRatio: an interval longer than fillRatio*median has missed beats.
 	fillRatio = 1.6
 )
@@ -323,12 +327,23 @@ func (m *Map) Range() (lo, hi float64) {
 	return lo, hi
 }
 
-// clean drops doubled beats and fills gaps by linear interpolation.
+// clean drops doubled and double-time beats and fills gaps by linear
+// interpolation. The median is taken over the raw intervals, so a tracker
+// that halves the beat for less than half of the song still yields the
+// song's real beat period.
 func clean(in []float64) (out []float64, dropped, filled int) {
 	med := median(intervals(in))
 	out = append(out, in[0])
 	for i := 1; i < len(in); i++ {
 		d := in[i] - out[len(out)-1]
+		if i+1 < len(in) {
+			// Double-time: this beat splits one real interval in two.
+			d2 := in[i+1] - in[i]
+			if d < halfRatio*med && d2 < halfRatio*med && d+d2 > 0.75*med && d+d2 < 1.25*med {
+				dropped++
+				continue
+			}
+		}
 		switch {
 		case d < dropRatio*med:
 			dropped++

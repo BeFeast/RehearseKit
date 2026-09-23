@@ -122,6 +122,10 @@ var (
 	SixStems  = []string{"vocals", "drums", "bass", "other", "guitar", "piano"}
 )
 
+// TranscribeStems are the stems a transcribe job gets note tracks for
+// (all present in the high6 model).
+var TranscribeStems = []string{"drums", "bass", "guitar", "piano"}
+
 // ModelFor maps a quality preset to its Demucs model and stem names.
 func ModelFor(quality string) (model string, stems []string) {
 	switch quality {

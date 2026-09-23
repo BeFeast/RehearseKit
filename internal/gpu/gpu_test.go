@@ -140,11 +140,11 @@ func TestLeaseStateMachine(t *testing.T) {
 	ctx := context.Background()
 	j := e.separatingJob(1, jobs.QualityHigh6)
 
-	if _, _, err := e.store.Claim(ctx, "r1"); err != nil {
+	if _, _, err := e.store.Claim(ctx, "r1", gpu.Capabilities{}); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	// A second claim finds nothing: the job has an active lease.
-	if _, _, err := e.store.Claim(ctx, "r2"); !errors.Is(err, gpu.ErrNoJobs) {
+	if _, _, err := e.store.Claim(ctx, "r2", gpu.Capabilities{}); !errors.Is(err, gpu.ErrNoJobs) {
 		t.Fatalf("second claim: %v", err)
 	}
 	l, err := e.pool.Query(ctx, `SELECT id FROM gpu_leases WHERE job_id = $1`, j.ID)
@@ -158,10 +158,10 @@ func TestLeaseStateMachine(t *testing.T) {
 	l.Close()
 
 	// Heartbeats map progress to 28..76 and are owner-bound.
-	if _, err := e.store.Heartbeat(ctx, leaseID, "r2", 0.5); !errors.Is(err, gpu.ErrWrongOwner) {
+	if _, err := e.store.Heartbeat(ctx, leaseID, "r2", 0.5, ""); !errors.Is(err, gpu.ErrWrongOwner) {
 		t.Fatalf("foreign heartbeat: %v", err)
 	}
-	if _, err := e.store.Heartbeat(ctx, leaseID, "r1", 0.5); err != nil {
+	if _, err := e.store.Heartbeat(ctx, leaseID, "r1", 0.5, ""); err != nil {
 		t.Fatalf("heartbeat: %v", err)
 	}
 	st, p, _ := e.jobs.Progress(ctx, j.ID)
@@ -169,14 +169,14 @@ func TestLeaseStateMachine(t *testing.T) {
 		t.Fatalf("after 50%%: %s %d", st, p)
 	}
 	// Progress never goes backwards.
-	if _, err := e.store.Heartbeat(ctx, leaseID, "r1", 0.1); err != nil {
+	if _, err := e.store.Heartbeat(ctx, leaseID, "r1", 0.1, ""); err != nil {
 		t.Fatal(err)
 	}
 	_, p, _ = e.jobs.Progress(ctx, j.ID)
 	if p != 52 {
 		t.Fatalf("progress regressed to %d", p)
 	}
-	if _, err := e.store.Heartbeat(ctx, leaseID, "r1", 1); err != nil {
+	if _, err := e.store.Heartbeat(ctx, leaseID, "r1", 1, ""); err != nil {
 		t.Fatal(err)
 	}
 	_, p, _ = e.jobs.Progress(ctx, j.ID)
@@ -185,7 +185,7 @@ func TestLeaseStateMachine(t *testing.T) {
 	}
 
 	// Complete needs all six stems.
-	err = e.store.Complete(ctx, leaseID, "r1", []gpu.StemReport{{Name: "vocals"}}, nil)
+	err = e.store.Complete(ctx, leaseID, "r1", []gpu.StemReport{{Name: "vocals"}}, nil, nil, nil)
 	if !errors.Is(err, gpu.ErrBadStems) {
 		t.Fatalf("incomplete stems: %v", err)
 	}
@@ -194,10 +194,10 @@ func TestLeaseStateMachine(t *testing.T) {
 		reports = append(reports, gpu.StemReport{Name: n})
 	}
 	verifyCalls := 0
-	if err := e.store.Complete(ctx, leaseID, "r1", reports, func(_ context.Context, _ string, _ gpu.StemReport) error {
+	if err := e.store.Complete(ctx, leaseID, "r1", reports, nil, func(_ context.Context, _ string, _ gpu.StemReport) error {
 		verifyCalls++
 		return nil
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	if verifyCalls != 6 {
@@ -211,7 +211,7 @@ func TestLeaseStateMachine(t *testing.T) {
 		t.Fatalf("lease state %v %v", lease, err)
 	}
 	// The closed lease rejects further calls.
-	if _, err := e.store.Heartbeat(ctx, leaseID, "r1", 1); !errors.Is(err, gpu.ErrNotActive) {
+	if _, err := e.store.Heartbeat(ctx, leaseID, "r1", 1, ""); !errors.Is(err, gpu.ErrNotActive) {
 		t.Fatalf("heartbeat on closed lease: %v", err)
 	}
 	if _, err := e.store.Fail(ctx, leaseID, "r1", "x"); !errors.Is(err, gpu.ErrNotActive) {
@@ -224,7 +224,7 @@ func TestFailPolicy(t *testing.T) {
 	ctx := context.Background()
 	j := e.separatingJob(1, jobs.QualityFast)
 	for attempt := 1; attempt <= gpu.DefaultMaxFailures; attempt++ {
-		l, _, err := e.store.Claim(ctx, "r")
+		l, _, err := e.store.Claim(ctx, "r", gpu.Capabilities{})
 		if err != nil {
 			t.Fatalf("claim %d: %v", attempt, err)
 		}
@@ -248,7 +248,7 @@ func TestFailPolicy(t *testing.T) {
 	if jj.Error == nil || !strings.Contains(*jj.Error, "boom 3") {
 		t.Fatalf("error %v", jj.Error)
 	}
-	if _, _, err := e.store.Claim(ctx, "r"); !errors.Is(err, gpu.ErrNoJobs) {
+	if _, _, err := e.store.Claim(ctx, "r", gpu.Capabilities{}); !errors.Is(err, gpu.ErrNoJobs) {
 		t.Fatalf("claim after job failed: %v", err)
 	}
 }
@@ -257,11 +257,11 @@ func TestExpiryReleasesJob(t *testing.T) {
 	e := newEnv(t, 50*time.Millisecond)
 	ctx := context.Background()
 	j := e.separatingJob(1, jobs.QualityFast)
-	l1, _, err := e.store.Claim(ctx, "r1")
+	l1, _, err := e.store.Claim(ctx, "r1", gpu.Capabilities{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.store.Claim(ctx, "r2"); !errors.Is(err, gpu.ErrNoJobs) {
+	if _, _, err := e.store.Claim(ctx, "r2", gpu.Capabilities{}); !errors.Is(err, gpu.ErrNoJobs) {
 		t.Fatalf("claim while leased: %v", err)
 	}
 	time.Sleep(80 * time.Millisecond)
@@ -276,11 +276,11 @@ func TestExpiryReleasesJob(t *testing.T) {
 		t.Fatalf("status after expiry %s", got)
 	}
 	// The old runner is told its lease is gone.
-	if _, err := e.store.Heartbeat(ctx, l1.ID, "r1", 0.9); !errors.Is(err, gpu.ErrNotActive) {
+	if _, err := e.store.Heartbeat(ctx, l1.ID, "r1", 0.9, ""); !errors.Is(err, gpu.ErrNotActive) {
 		t.Fatalf("stale heartbeat: %v", err)
 	}
 	// And another runner can take the job.
-	l2, jj, err := e.store.Claim(ctx, "r2")
+	l2, jj, err := e.store.Claim(ctx, "r2", gpu.Capabilities{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestExpiryReleasesJob(t *testing.T) {
 	if _, err := e.store.Fail(ctx, l1.ID, "r1", "late"); !errors.Is(err, gpu.ErrNotActive) {
 		t.Fatalf("late fail: %v", err)
 	}
-	if err := e.store.Complete(ctx, l1.ID, "r1", nil, nil); !errors.Is(err, gpu.ErrNotActive) {
+	if err := e.store.Complete(ctx, l1.ID, "r1", nil, nil, nil, nil); !errors.Is(err, gpu.ErrNotActive) {
 		t.Fatalf("late complete: %v", err)
 	}
 	if n, _ := e.store.Failures(ctx, j.ID); n != 1 {
@@ -319,14 +319,14 @@ func TestCancelledJobClosesLease(t *testing.T) {
 	e := newEnv(t, time.Minute)
 	ctx := context.Background()
 	j := e.separatingJob(1, jobs.QualityFast)
-	l, _, err := e.store.Claim(ctx, "r")
+	l, _, err := e.store.Claim(ctx, "r", gpu.Capabilities{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := jobs.Cancel(ctx, e.pool, j.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.store.Heartbeat(ctx, l.ID, "r", 0.5); !errors.Is(err, gpu.ErrJobGone) {
+	if _, err := e.store.Heartbeat(ctx, l.ID, "r", 0.5, ""); !errors.Is(err, gpu.ErrJobGone) {
 		t.Fatalf("heartbeat after cancel: %v", err)
 	}
 	lease, _ := e.store.Get(ctx, l.ID)
@@ -351,7 +351,7 @@ func TestConcurrentRunners(t *testing.T) {
 		go func(r int) {
 			defer wg.Done()
 			for {
-				_, j, err := e.store.Claim(ctx, fmt.Sprintf("r%d", r))
+				_, j, err := e.store.Claim(ctx, fmt.Sprintf("r%d", r), gpu.Capabilities{})
 				if errors.Is(err, gpu.ErrNoJobs) {
 					return
 				}
@@ -514,5 +514,213 @@ func TestDisabledWithoutToken(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status %d", resp.StatusCode)
+	}
+}
+
+// transcribeJob creates a transcribe (high6) job in `separating`.
+func (e *env) transcribeJob(n int) *jobs.Job {
+	e.t.Helper()
+	id := randomID(e.t)
+	j, err := e.jobs.Create(context.Background(), id, jobs.CreateParams{
+		ProjectName: fmt.Sprintf("transcribe %d", n), InputType: jobs.InputUpload, Quality: jobs.QualityHigh6, Transcribe: true,
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	dir, _ := e.layout.JobDir(id)
+	_ = os.MkdirAll(dir, 0o755)
+	if _, err := wavtest.Write(filepath.Join(dir, "source.wav"), wavtest.Options{Seconds: 0.1}); err != nil {
+		e.t.Fatal(err)
+	}
+	for _, st := range []string{jobs.StatusConverting, jobs.StatusAnalyzing, jobs.StatusSeparating} {
+		if err := jobs.Transition(context.Background(), e.pool, id, st, jobs.StageStart(st), st); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+	return j
+}
+
+func (e *env) put(url string, body []byte) (int, []byte) {
+	e.t.Helper()
+	req, _ := http.NewRequest(http.MethodPut, url, bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer r.Body.Close()
+	b, _ := io.ReadAll(r.Body)
+	return r.StatusCode, b
+}
+
+func report(name string, body []byte) gpu.ArtifactReport {
+	sum := sha256.Sum256(body)
+	return gpu.ArtifactReport{Name: name, Bytes: int64(len(body)), SHA256: hex.EncodeToString(sum[:])}
+}
+
+// TestTranscribeProtocol covers both compatibility directions: a runner
+// without the capability (an old image) never sees a transcribe job, a
+// capable runner gets the artefact URLs and must upload analysis.json.
+func TestTranscribeProtocol(t *testing.T) {
+	e := newEnv(t, time.Minute)
+	tj := e.transcribeJob(1)
+
+	// Old runner: no X-Runner-Features → the transcribe job is not offered.
+	resp, _ := e.post("/api/v1/gpu/lease", map[string]string{"runner_id": "old"}, token)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("old runner got a transcribe job: %d", resp.StatusCode)
+	}
+	// Queue stats show it as waiting for a capable runner.
+	req, _ := http.NewRequest(http.MethodGet, e.ts.URL+"/api/v1/gpu/queue", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	qr, _ := http.DefaultClient.Do(req)
+	var st gpu.QueueStats
+	_ = json.NewDecoder(qr.Body).Decode(&st)
+	qr.Body.Close()
+	if st.Waiting != 1 || st.WaitingTranscribe != 1 {
+		t.Fatalf("queue %+v", st)
+	}
+
+	// A plain job leased by a capable runner carries no transcribe fields.
+	pj := e.separatingJob(2, jobs.QualityFast)
+	lreq, _ := http.NewRequest(http.MethodPost, e.ts.URL+"/api/v1/gpu/lease", strings.NewReader(`{"runner_id":"new"}`))
+	lreq.Header.Set("Authorization", "Bearer "+token)
+	lreq.Header.Set("Content-Type", "application/json")
+	lreq.Header.Set(gpu.FeaturesHeader, "transcribe")
+	lr, _ := http.DefaultClient.Do(lreq)
+	body, _ := io.ReadAll(lr.Body)
+	lr.Body.Close()
+	var lease gpu.LeaseResponse
+	_ = json.Unmarshal(body, &lease)
+	// The oldest job is the transcribe one (created first).
+	if lease.JobID != tj.ID || !lease.Transcribe || lease.ArtifactURLs == nil || lease.ArtifactURLs.Analysis == "" || len(lease.ArtifactURLs.Notes) != 4 {
+		t.Fatalf("transcribe lease: %s", body)
+	}
+	lr2, _ := http.DefaultClient.Do(lreq.Clone(context.Background()))
+	body2, _ := io.ReadAll(lr2.Body)
+	lr2.Body.Close()
+	if strings.Contains(string(body2), "transcribe") || strings.Contains(string(body2), "artifact_urls") {
+		t.Fatalf("plain lease leaks transcribe fields: %s", body2)
+	}
+	var plain gpu.LeaseResponse
+	_ = json.Unmarshal(body2, &plain)
+	if plain.JobID != pj.ID {
+		t.Fatalf("plain lease %s", body2)
+	}
+
+	// Heartbeat with a stage: caption changes.
+	resp, body = e.post("/api/v1/gpu/lease/"+lease.LeaseID+"/heartbeat", gpu.HeartbeatRequest{RunnerID: "new", Progress: 0.7, Stage: gpu.StageTranscribing}, token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("heartbeat: %d %s", resp.StatusCode, body)
+	}
+	resp, _ = e.post("/api/v1/gpu/lease/"+lease.LeaseID+"/heartbeat", map[string]any{"runner_id": "new", "progress": 0.7, "stage": "dancing"}, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad stage: %d", resp.StatusCode)
+	}
+
+	// Upload the stems.
+	src, _ := http.Get(lease.SourceURL)
+	srcBytes, _ := io.ReadAll(src.Body)
+	src.Body.Close()
+	var reports []gpu.StemReport
+	for _, name := range lease.Stems {
+		if code, _ := e.put(lease.UploadURLs[name], srcBytes); code != http.StatusCreated {
+			t.Fatalf("put %s: %d", name, code)
+		}
+		sum := sha256.Sum256(srcBytes)
+		reports = append(reports, gpu.StemReport{Name: name, Bytes: int64(len(srcBytes)), SHA256: hex.EncodeToString(sum[:])})
+	}
+	// Complete without artefacts on a transcribe job → bad_artifacts, lease still active.
+	resp, body = e.post("/api/v1/gpu/lease/"+lease.LeaseID+"/complete", gpu.CompleteRequest{RunnerID: "new", Stems: reports}, token)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "bad_artifacts") {
+		t.Fatalf("complete without analysis: %d %s", resp.StatusCode, body)
+	}
+	// Upload analysis.json (grid failed, one instrument failed) and one notes file.
+	an := []byte(`{"version":1,"grid":null,"grid_error":"too few beats","sections":null,"instruments":{"drums":{"status":"failed","reason":"timeout"},"bass":{"status":"ok","notes":1}}}`)
+	if code, b := e.put(lease.ArtifactURLs.Analysis, an); code != http.StatusCreated {
+		t.Fatalf("put analysis: %d %s", code, b)
+	}
+	notes := []byte(`{"stem":"bass","notes":[{"onset":0.5,"offset":1,"pitch":40,"velocity":0.8}]}`)
+	if code, b := e.put(lease.ArtifactURLs.Notes["bass"], notes); code != http.StatusCreated {
+		t.Fatalf("put notes: %d %s", code, b)
+	}
+	if code, _ := e.put(lease.ArtifactURLs.Notes["bass"], []byte("{not json")); code != http.StatusBadRequest {
+		t.Fatalf("invalid json accepted: %d", code)
+	}
+	// Wrong checksum / unknown name are rejected.
+	badRep := report(gpu.ArtifactAnalysis, an)
+	badRep.SHA256 = strings.Repeat("0", 64)
+	resp, body = e.post("/api/v1/gpu/lease/"+lease.LeaseID+"/complete", gpu.CompleteRequest{RunnerID: "new", Stems: reports, Artifacts: []gpu.ArtifactReport{badRep}}, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad artifact sha: %d %s", resp.StatusCode, body)
+	}
+	resp, body = e.post("/api/v1/gpu/lease/"+lease.LeaseID+"/complete", gpu.CompleteRequest{RunnerID: "new", Stems: reports,
+		Artifacts: []gpu.ArtifactReport{report(gpu.ArtifactAnalysis, an), report("notes/vocals", notes)}}, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown artifact: %d %s", resp.StatusCode, body)
+	}
+	resp, body = e.post("/api/v1/gpu/lease/"+lease.LeaseID+"/complete", gpu.CompleteRequest{RunnerID: "new", Stems: reports,
+		Artifacts: []gpu.ArtifactReport{report(gpu.ArtifactAnalysis, an), report("notes/bass", notes)}}, token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("complete: %d %s", resp.StatusCode, body)
+	}
+	if got := e.status(tj.ID); got != jobs.StatusFinalizing {
+		t.Fatalf("status %s", got)
+	}
+	// Files landed where the worker reads them.
+	ap, _ := e.layout.AnalysisPath(tj.ID)
+	np, _ := e.layout.NotesPath(tj.ID, "bass")
+	if _, err := os.Stat(ap); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(np); err != nil {
+		t.Fatal(err)
+	}
+
+	// A plain job rejects artefacts.
+	resp, body = e.post("/api/v1/gpu/lease/"+plain.LeaseID+"/complete", gpu.CompleteRequest{RunnerID: "new", Stems: nil,
+		Artifacts: []gpu.ArtifactReport{report(gpu.ArtifactAnalysis, an)}}, token)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "bad_") {
+		t.Fatalf("plain job with artefacts: %d %s", resp.StatusCode, body)
+	}
+}
+
+// TestRequestBodiesStayCompatible: a new runner talking to the server
+// that predates transcription must not send the new keys on plain
+// leases, because that server decodes with DisallowUnknownFields.
+func TestRequestBodiesStayCompatible(t *testing.T) {
+	type oldHeartbeat struct {
+		RunnerID string  `json:"runner_id"`
+		Progress float64 `json:"progress"`
+	}
+	type oldComplete struct {
+		RunnerID string           `json:"runner_id"`
+		Stems    []gpu.StemReport `json:"stems"`
+	}
+	decode := func(v any, body []byte) error {
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.DisallowUnknownFields()
+		return dec.Decode(v)
+	}
+	hb, _ := json.Marshal(gpu.HeartbeatRequest{RunnerID: "r", Progress: 0.5})
+	if err := decode(&oldHeartbeat{}, hb); err != nil {
+		t.Fatalf("heartbeat without stage: %v (%s)", err, hb)
+	}
+	cp, _ := json.Marshal(gpu.CompleteRequest{RunnerID: "r", Stems: []gpu.StemReport{{Name: "vocals"}}})
+	if err := decode(&oldComplete{}, cp); err != nil {
+		t.Fatalf("complete without artifacts: %v (%s)", err, cp)
+	}
+	// And the new fields do appear when set.
+	hb, _ = json.Marshal(gpu.HeartbeatRequest{RunnerID: "r", Progress: 0.5, Stage: gpu.StageTranscribing})
+	if !strings.Contains(string(hb), `"stage":"transcribing"`) {
+		t.Fatalf("stage missing: %s", hb)
+	}
+	// Feature header parsing.
+	if c := gpu.ParseFeatures(" Transcribe , x"); !c.Transcribe {
+		t.Fatal("ParseFeatures")
+	}
+	if c := gpu.ParseFeatures(""); c.Transcribe {
+		t.Fatal("ParseFeatures empty")
 	}
 }
