@@ -52,6 +52,33 @@ const res = await fetch(`${endpoint}/json/new?${encodeURIComponent(url)}`, { met
 const target = await res.json();
 const ws = new WebSocket(target.webSocketDebuggerUrl);
 await new Promise((r) => (ws.onopen = r));
+
+// Close the tab no matter how the run ends. A tab left behind keeps the
+// lab page's audio + render loop alive under swiftshader and burns ~10 CPU
+// cores until someone notices (maestro, 2026-09-23). The close goes over the
+// HTTP endpoint so it works even when the CDP socket is already gone.
+class Exit extends Error {
+  constructor(code) {
+    super(`exit ${code}`);
+    this.code = code;
+  }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let closing = false;
+const shutdown = async (code) => {
+  if (closing) return;
+  closing = true;
+  await Promise.race([fetch(`${endpoint}/json/close/${target.id}`).catch(() => {}), sleep(1500)]);
+  try {
+    ws.close();
+  } catch {}
+  process.exit(code);
+};
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => void shutdown(130));
+process.on('uncaughtException', (err) => {
+  console.error('FAILED:', err?.stack ?? err);
+  void shutdown(1);
+});
 let id = 0;
 const pending = new Map();
 const send = (method, params = {}) =>
@@ -82,110 +109,118 @@ ws.onmessage = ({ data }) => {
     console.log(ts(), 'EXCEPTION:', text.slice(0, 400));
   } else if (msg.method === 'Inspector.targetCrashed') {
     console.log(ts(), '!!! TARGET CRASHED');
-    process.exit(3);
+    void shutdown(3);
   }
 };
-await send('Runtime.enable');
-await send('Page.enable');
-await send('Inspector.enable');
+let exitCode = 0;
+try {
+  await send('Runtime.enable');
+  await send('Page.enable');
+  await send('Inspector.enable');
 
-const evaluate = async (expression) => {
-  const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
-  if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
-  return r.result.value;
-};
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const waitFor = async (expression, timeoutMs, label) => {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await evaluate(expression)) return;
-    await sleep(200);
-  }
-  throw new Error(`timeout waiting for ${label}`);
-};
-const click = (testid) => evaluate(`(() => { const b = document.querySelector('[data-testid="${testid}"]'); if (!b) return 'missing'; b.click(); return 'ok'; })()`);
-
-const SAMPLE = `(async () => {
-  const s = window.__labStream?.stats() ?? null;
-  const m = await window.__labStream?.memory();
-  const e = window.__labStream?.engine;
-  return {
-    state: s?.state, position: e?.position, duration: e?.duration, underruns: s?.underruns, quanta: s?.quanta,
-    requests: s?.requests, bytesMB: s ? +(s.bytes / 1048576).toFixed(1) : null, lastSeekMs: s?.lastSeekMs,
-    ringFill: s?.ringFill?.map((x) => Math.round(x * 100)), maxFetchMs: s ? Math.max(...s.streams.map((x) => x.maxFetchMs)) : null,
-    inFlight: s ? s.streams.filter((x) => x.inFlight).length : null, error: s?.error ?? null,
-    jsHeapMB: m?.jsHeapUsedMB && +m.jsHeapUsedMB.toFixed(1), uaMB: m?.uaMemoryMB && +m.uaMemoryMB.toFixed(1),
-    isolated: crossOriginIsolated,
+  const evaluate = async (expression) => {
+    const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
+    return r.result.value;
   };
-})()`;
+  const waitFor = async (expression, timeoutMs, label) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (await evaluate(expression)) return;
+      await sleep(200);
+    }
+    throw new Error(`timeout waiting for ${label}`);
+  };
+  const click = (testid) => evaluate(`(() => { const b = document.querySelector('[data-testid="${testid}"]'); if (!b) return 'missing'; b.click(); return 'ok'; })()`);
 
-await waitFor(`!!document.querySelector('[data-testid="lab-load"]')`, 30000, 'lab page');
-console.log(ts(), 'isolated:', await evaluate('crossOriginIsolated'));
-console.log(ts(), 'load:', await click('lab-load'));
-await waitFor(`!!(window.__labStream && window.__labStream.engine) || !!document.querySelector('[data-testid="lab-error"]')`, 30000, 'engine');
-const loadError = await evaluate(`document.querySelector('[data-testid="lab-error"]')?.textContent ?? null`);
-if (loadError) {
-  console.log(ts(), 'LOAD ERROR:', loadError);
-  process.exit(4);
-}
-console.log(ts(), 'baseline:', await evaluate(`document.querySelector('[data-testid="lab-baseline"]')?.textContent`));
-const playAt = Date.now();
-console.log(ts(), 'play:', await click('lab-play'));
-await waitFor(`window.__labStream.stats()?.state === 'playing'`, 15000, 'playing');
-console.log(ts(), `first sound after ${Date.now() - playAt} ms (engine lastSeekMs=${await evaluate('window.__labStream.stats().lastSeekMs')})`);
-// Warm-up underruns (before PLAYING) are not counted by design; note the count now.
-const warmupUnderruns = await evaluate('window.__labStream.stats().underruns');
+  const SAMPLE = `(async () => {
+    const s = window.__labStream?.stats() ?? null;
+    const m = await window.__labStream?.memory();
+    const e = window.__labStream?.engine;
+    return {
+      state: s?.state, position: e?.position, duration: e?.duration, underruns: s?.underruns, quanta: s?.quanta,
+      requests: s?.requests, bytesMB: s ? +(s.bytes / 1048576).toFixed(1) : null, lastSeekMs: s?.lastSeekMs,
+      ringFill: s?.ringFill?.map((x) => Math.round(x * 100)), maxFetchMs: s ? Math.max(...s.streams.map((x) => x.maxFetchMs)) : null,
+      inFlight: s ? s.streams.filter((x) => x.inFlight).length : null, error: s?.error ?? null,
+      jsHeapMB: m?.jsHeapUsedMB && +m.jsHeapUsedMB.toFixed(1), uaMB: m?.uaMemoryMB && +m.uaMemoryMB.toFixed(1),
+      isolated: crossOriginIsolated,
+    };
+  })()`;
 
-const samples = [];
-let nextAction = 0;
-const startedAt = Date.now();
-while ((Date.now() - startedAt) / 1000 < DURATION) {
-  await sleep(POLL * 1000);
-  const elapsed = (Date.now() - startedAt) / 1000;
-  while (nextAction < actions.length && actions[nextAction].at <= elapsed) {
-    const a = actions[nextAction++];
-    const e = 'window.__labStream.engine';
-    let r;
-    if (a.kind === 'seek') r = await evaluate(`${e}.seek(${a.arg}), 'seek ${a.arg}'`);
-    else if (a.kind === 'seek-end') r = await evaluate(`${e}.seek(${e}.duration), 'seek end'`);
-    else if (a.kind === 'loop') r = await evaluate(`${e}.setLoop({start:${a.arg[0]},end:${a.arg[1]}}) ? 'loop ${a.arg[0]}-${a.arg[1]}' : 'loop rejected'`);
-    else if (a.kind === 'clear-loop') r = await evaluate(`${e}.setLoop(null), 'loop cleared'`);
-    else if (a.kind === 'stop') r = await evaluate(`${e}.stop(), 'stop'`);
-    else if (a.kind === 'play') r = await evaluate(`${e}.play(), 'play'`);
-    console.log(ts(), 'action:', r);
-    await sleep(1500);
-    console.log(ts(), 'after action:', JSON.stringify(await evaluate(SAMPLE)));
+  await waitFor(`!!document.querySelector('[data-testid="lab-load"]')`, 30000, 'lab page');
+  console.log(ts(), 'isolated:', await evaluate('crossOriginIsolated'));
+  console.log(ts(), 'load:', await click('lab-load'));
+  await waitFor(`!!(window.__labStream && window.__labStream.engine) || !!document.querySelector('[data-testid="lab-error"]')`, 30000, 'engine');
+  const loadError = await evaluate(`document.querySelector('[data-testid="lab-error"]')?.textContent ?? null`);
+  if (loadError) {
+    console.log(ts(), 'LOAD ERROR:', loadError);
+    throw new Exit(4);
   }
-  const s = await evaluate(SAMPLE);
-  s.t = +elapsed.toFixed(1);
-  samples.push(s);
-  console.log(ts(), JSON.stringify(s));
-  if (s.error) {
-    console.log(ts(), 'ENGINE ERROR:', s.error);
-    break;
-  }
-}
+  console.log(ts(), 'baseline:', await evaluate(`document.querySelector('[data-testid="lab-baseline"]')?.textContent`));
+  const playAt = Date.now();
+  console.log(ts(), 'play:', await click('lab-play'));
+  await waitFor(`window.__labStream.stats()?.state === 'playing'`, 15000, 'playing');
+  console.log(ts(), `first sound after ${Date.now() - playAt} ms (engine lastSeekMs=${await evaluate('window.__labStream.stats().lastSeekMs')})`);
+  // Warm-up underruns (before PLAYING) are not counted by design; note the count now.
+  const warmupUnderruns = await evaluate('window.__labStream.stats().underruns');
 
-const summary = {
-  url,
-  durationS: DURATION,
-  warmupUnderruns,
-  finalUnderruns: samples.at(-1)?.underruns,
-  maxJsHeapMB: Math.max(...samples.map((s) => s.jsHeapMB ?? 0)),
-  maxUaMB: Math.max(...samples.map((s) => s.uaMB ?? 0)),
-  requests: samples.at(-1)?.requests,
-  bytesMB: samples.at(-1)?.bytesMB,
-  maxFetchMs: samples.at(-1)?.maxFetchMs,
-  finalState: samples.at(-1)?.state,
-  finalPosition: samples.at(-1)?.position,
-  consoleErrors: consoleErrors.length,
-};
-console.log(ts(), 'summary', JSON.stringify(summary));
-if (SHOT) {
-  const { data } = await send('Page.captureScreenshot', { format: 'png' });
-  fs.writeFileSync(SHOT, Buffer.from(data, 'base64'));
-  console.log(ts(), 'screenshot', SHOT);
+  const samples = [];
+  let nextAction = 0;
+  const startedAt = Date.now();
+  while ((Date.now() - startedAt) / 1000 < DURATION) {
+    await sleep(POLL * 1000);
+    const elapsed = (Date.now() - startedAt) / 1000;
+    while (nextAction < actions.length && actions[nextAction].at <= elapsed) {
+      const a = actions[nextAction++];
+      const e = 'window.__labStream.engine';
+      let r;
+      if (a.kind === 'seek') r = await evaluate(`${e}.seek(${a.arg}), 'seek ${a.arg}'`);
+      else if (a.kind === 'seek-end') r = await evaluate(`${e}.seek(${e}.duration), 'seek end'`);
+      else if (a.kind === 'loop') r = await evaluate(`${e}.setLoop({start:${a.arg[0]},end:${a.arg[1]}}) ? 'loop ${a.arg[0]}-${a.arg[1]}' : 'loop rejected'`);
+      else if (a.kind === 'clear-loop') r = await evaluate(`${e}.setLoop(null), 'loop cleared'`);
+      else if (a.kind === 'stop') r = await evaluate(`${e}.stop(), 'stop'`);
+      else if (a.kind === 'play') r = await evaluate(`${e}.play(), 'play'`);
+      console.log(ts(), 'action:', r);
+      await sleep(1500);
+      console.log(ts(), 'after action:', JSON.stringify(await evaluate(SAMPLE)));
+    }
+    const s = await evaluate(SAMPLE);
+    s.t = +elapsed.toFixed(1);
+    samples.push(s);
+    console.log(ts(), JSON.stringify(s));
+    if (s.error) {
+      console.log(ts(), 'ENGINE ERROR:', s.error);
+      break;
+    }
+  }
+
+  const summary = {
+    url,
+    durationS: DURATION,
+    warmupUnderruns,
+    finalUnderruns: samples.at(-1)?.underruns,
+    maxJsHeapMB: Math.max(...samples.map((s) => s.jsHeapMB ?? 0)),
+    maxUaMB: Math.max(...samples.map((s) => s.uaMB ?? 0)),
+    requests: samples.at(-1)?.requests,
+    bytesMB: samples.at(-1)?.bytesMB,
+    maxFetchMs: samples.at(-1)?.maxFetchMs,
+    finalState: samples.at(-1)?.state,
+    finalPosition: samples.at(-1)?.position,
+    consoleErrors: consoleErrors.length,
+  };
+  console.log(ts(), 'summary', JSON.stringify(summary));
+  if (SHOT) {
+    const { data } = await send('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(SHOT, Buffer.from(data, 'base64'));
+    console.log(ts(), 'screenshot', SHOT);
+  }
+  if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify({ summary, samples, consoleErrors }, null, 2));
+} catch (err) {
+  if (err instanceof Exit) exitCode = err.code;
+  else {
+    console.error(ts(), 'FAILED:', err?.stack ?? err);
+    exitCode = 1;
+  }
+} finally {
+  await shutdown(exitCode);
 }
-if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify({ summary, samples, consoleErrors }, null, 2));
-await send('Page.close').catch(() => {});
-ws.close();
