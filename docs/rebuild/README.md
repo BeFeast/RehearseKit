@@ -29,7 +29,10 @@ internal/pipeline/peaks/        .pk writer/reader (min/max mip pyramid)
 internal/pipeline/media/        ffprobe / ffmpeg / yt-dlp wrappers (ctx-killed)
 internal/pipeline/tempo/        tempo.json model + runner for tools/tempo/tempo.py
 internal/pipeline/demucs/       demucs runner + tqdm progress folding
-internal/pipeline/dawproject/   DAWproject 1.0 writer (golden-tested XML)
+internal/pipeline/dawproject/   DAWproject 1.0 writer (golden-tested XML, XSD-validated)
+internal/pipeline/grid/         beats + downbeats → seconds↔beats map, tempo/time-signature lanes
+internal/pipeline/analysis/     analysis.json / notes/<stem>.json schema (transcription artefacts)
+internal/pipeline/midi/         .mid writer (SMF 1, tempo track from the grid) via gomidi
 internal/pipeline/pack/         package.zip + README
 internal/pipeline/wavcheck/     24-bit/48 kHz/stereo WAV validation
 internal/config/                RK_* environment
@@ -157,9 +160,41 @@ DAWproject (`project.dawproject`): zip with `project.xml`
 (timeUnit=beats) → Lanes(track) → Clips → Clip → Warps
 (contentTimeUnit=seconds) → Audio/File + two Warp markers `(0,0)` and
 `(songBeats, songSeconds)`), `metadata.xml` (Title, Year, Comment) and
-`audio/<name>.wav` copies. Golden test:
+`audio/<name>.wav` copies. Entries are written with precomputed sizes and
+CRCs (no data descriptors; Cubase rejects them). Golden test:
 `internal/pipeline/dawproject/testdata/project.xml` (`go test -update`
-to regenerate).
+to regenerate); both goldens are validated against
+`testdata/Project.xsd` (bitwig/dawproject, MIT) when `xmllint` is on PATH.
+
+With a beat grid (`dawproject.Project.Grid`, built by `internal/pipeline/grid`
+from beats + downbeats in seconds) the project carries the transcription:
+
+- every clip starts at `Beat(0)`, the fractional beat where second 0 falls
+  once the first downbeat is put on a bar boundary (lead-in), and has one
+  Warp per beat, so audio plays at the original speed on a variable grid;
+- `TempoAutomation unit="bpm"` with `<Target parameter="tempo"/>` in the
+  stepped Bitwig form: two linear `RealPoint`s per beat (previous tempo,
+  new tempo), values clamped to 20–666; omitted when the beat-interval
+  spread (p95−p5)/median is under 2 % (a single constant tempo instead);
+- `TimeSignatureAutomation` with `<Target parameter="timesig"/>` when the
+  numerator changes (denominator is always 4; the numerator of a bar is its
+  beat count; an isolated bar whose count is a multiple of its neighbours'
+  numerator is a missed downbeat and is merged, every other change is
+  written, so bar lines follow the detected downbeats);
+- `Markers` (only when there is at least one), `Track contentType="notes"`
+  per transcribed stem (`track-<stem>-midi`, routed to the master) with a
+  single clip of `Note`s (`time`, `duration`, `channel`, `key`, `vel`, `rel`).
+
+Element order in `Arrangement` is `Lanes, Markers, TempoAutomation,
+TimeSignatureAutomation` (schema order). Beat cleaning: intervals under
+0.5× the median are doubled beats and dropped, gaps over 1.6× are filled by
+interpolation. `go test ./internal/pipeline/dawproject -run TestSynthetic
+-synthetic out.dawproject` writes a click-track project with a tempo change,
+a 3/4 section, markers and note clips for checking a DAW by hand.
+
+`.mid` files (`internal/pipeline/midi`): SMF format 1 at 960 PPQ, track 0
+holds the meter and tempo events derived from the same grid, track 1 the
+notes (channel 10 for drums).
 
 Sweepers (in the worker process): expired GPU leases every 30 s, jobs stuck
 in a CPU stage with no event for 45 min every 5 min (→ failed), retention

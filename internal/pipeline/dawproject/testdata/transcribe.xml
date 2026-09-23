@@ -1,0 +1,526 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project version="1.0">
+  <Application name="RehearseKit" version="test"></Application>
+  <Transport>
+    <Tempo max="999.000000" min="20.000000" unit="bpm" value="120.000000" id="tempo" name="Tempo"></Tempo>
+    <TimeSignature denominator="4" numerator="4" id="timesig"></TimeSignature>
+  </Transport>
+  <Structure>
+    <Track contentType="audio" loaded="true" id="track-drums" name="Drums" color="#FFA500">
+      <Channel audioChannels="2" destination="master-channel" role="regular" solo="false" id="channel-drums">
+        <Mute value="false" id="channel-drums-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="channel-drums-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="channel-drums-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+    <Track contentType="audio" loaded="true" id="track-bass" name="Bass" color="#4169E1">
+      <Channel audioChannels="2" destination="master-channel" role="regular" solo="false" id="channel-bass">
+        <Mute value="false" id="channel-bass-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="channel-bass-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="channel-bass-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+    <Track contentType="notes" loaded="true" id="track-bass-midi" name="Bass MIDI" color="#4169E1">
+      <Channel audioChannels="2" destination="master-channel" role="regular" solo="false" id="channel-bass-midi">
+        <Mute value="false" id="channel-bass-midi-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="channel-bass-midi-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="channel-bass-midi-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+    <Track contentType="notes" loaded="true" id="track-drums-midi" name="Drums MIDI" color="#FFA500">
+      <Channel audioChannels="2" destination="master-channel" role="regular" solo="false" id="channel-drums-midi">
+        <Mute value="false" id="channel-drums-midi-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="channel-drums-midi-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="channel-drums-midi-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+    <Track contentType="audio notes" loaded="true" id="master" name="Master">
+      <Channel audioChannels="2" role="master" solo="false" id="master-channel">
+        <Mute value="false" id="master-channel-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="master-channel-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="master-channel-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+  </Structure>
+  <Arrangement id="arrangement">
+    <Lanes timeUnit="beats" id="lanes">
+      <Lanes track="track-drums" id="lanes-drums">
+        <Clips id="clips-drums">
+          <Clip time="3.500000" duration="78.833333" playStart="0.000000" name="Drums">
+            <Warps contentTimeUnit="seconds" timeUnit="beats">
+              <Audio algorithm="stretch" channels="2" duration="36.964286" sampleRate="48000">
+                <File path="audio/drums.wav"></File>
+              </Audio>
+              <Warp time="0.000000" contentTime="0.000000"></Warp>
+              <Warp time="0.500000" contentTime="0.250000"></Warp>
+              <Warp time="1.500000" contentTime="0.750000"></Warp>
+              <Warp time="2.500000" contentTime="1.250000"></Warp>
+              <Warp time="3.500000" contentTime="1.750000"></Warp>
+              <Warp time="4.500000" contentTime="2.250000"></Warp>
+              <Warp time="5.500000" contentTime="2.750000"></Warp>
+              <Warp time="6.500000" contentTime="3.250000"></Warp>
+              <Warp time="7.500000" contentTime="3.750000"></Warp>
+              <Warp time="8.500000" contentTime="4.250000"></Warp>
+              <Warp time="9.500000" contentTime="4.750000"></Warp>
+              <Warp time="10.500000" contentTime="5.250000"></Warp>
+              <Warp time="11.500000" contentTime="5.750000"></Warp>
+              <Warp time="12.500000" contentTime="6.250000"></Warp>
+              <Warp time="13.500000" contentTime="6.750000"></Warp>
+              <Warp time="14.500000" contentTime="7.250000"></Warp>
+              <Warp time="15.500000" contentTime="7.750000"></Warp>
+              <Warp time="16.500000" contentTime="8.250000"></Warp>
+              <Warp time="17.500000" contentTime="8.750000"></Warp>
+              <Warp time="18.500000" contentTime="9.250000"></Warp>
+              <Warp time="19.500000" contentTime="9.750000"></Warp>
+              <Warp time="20.500000" contentTime="10.250000"></Warp>
+              <Warp time="21.500000" contentTime="10.750000"></Warp>
+              <Warp time="22.500000" contentTime="11.250000"></Warp>
+              <Warp time="23.500000" contentTime="11.750000"></Warp>
+              <Warp time="24.500000" contentTime="12.250000"></Warp>
+              <Warp time="25.500000" contentTime="12.750000"></Warp>
+              <Warp time="26.500000" contentTime="13.250000"></Warp>
+              <Warp time="27.500000" contentTime="13.750000"></Warp>
+              <Warp time="28.500000" contentTime="14.250000"></Warp>
+              <Warp time="29.500000" contentTime="14.750000"></Warp>
+              <Warp time="30.500000" contentTime="15.250000"></Warp>
+              <Warp time="31.500000" contentTime="15.750000"></Warp>
+              <Warp time="32.500000" contentTime="16.250000"></Warp>
+              <Warp time="33.500000" contentTime="16.750000"></Warp>
+              <Warp time="34.500000" contentTime="17.250000"></Warp>
+              <Warp time="35.500000" contentTime="17.750000"></Warp>
+              <Warp time="36.500000" contentTime="18.250000"></Warp>
+              <Warp time="37.500000" contentTime="18.750000"></Warp>
+              <Warp time="38.500000" contentTime="19.250000"></Warp>
+              <Warp time="39.500000" contentTime="19.750000"></Warp>
+              <Warp time="40.500000" contentTime="20.250000"></Warp>
+              <Warp time="41.500000" contentTime="20.750000"></Warp>
+              <Warp time="42.500000" contentTime="21.250000"></Warp>
+              <Warp time="43.500000" contentTime="21.750000"></Warp>
+              <Warp time="44.500000" contentTime="22.250000"></Warp>
+              <Warp time="45.500000" contentTime="22.678571"></Warp>
+              <Warp time="46.500000" contentTime="23.107143"></Warp>
+              <Warp time="47.500000" contentTime="23.535714"></Warp>
+              <Warp time="48.500000" contentTime="23.964286"></Warp>
+              <Warp time="49.500000" contentTime="24.392857"></Warp>
+              <Warp time="50.500000" contentTime="24.821429"></Warp>
+              <Warp time="51.500000" contentTime="25.250000"></Warp>
+              <Warp time="52.500000" contentTime="25.678571"></Warp>
+              <Warp time="53.500000" contentTime="26.107143"></Warp>
+              <Warp time="54.500000" contentTime="26.535714"></Warp>
+              <Warp time="55.500000" contentTime="26.964286"></Warp>
+              <Warp time="56.500000" contentTime="27.392857"></Warp>
+              <Warp time="57.500000" contentTime="27.821429"></Warp>
+              <Warp time="58.500000" contentTime="28.250000"></Warp>
+              <Warp time="59.500000" contentTime="28.678571"></Warp>
+              <Warp time="60.500000" contentTime="29.107143"></Warp>
+              <Warp time="61.500000" contentTime="29.535714"></Warp>
+              <Warp time="62.500000" contentTime="29.964286"></Warp>
+              <Warp time="63.500000" contentTime="30.392857"></Warp>
+              <Warp time="64.500000" contentTime="30.821429"></Warp>
+              <Warp time="65.500000" contentTime="31.250000"></Warp>
+              <Warp time="66.500000" contentTime="31.678571"></Warp>
+              <Warp time="67.500000" contentTime="32.107143"></Warp>
+              <Warp time="68.500000" contentTime="32.535714"></Warp>
+              <Warp time="69.500000" contentTime="32.964286"></Warp>
+              <Warp time="70.500000" contentTime="33.392857"></Warp>
+              <Warp time="71.500000" contentTime="33.821429"></Warp>
+              <Warp time="72.500000" contentTime="34.250000"></Warp>
+              <Warp time="73.500000" contentTime="34.678571"></Warp>
+              <Warp time="74.500000" contentTime="35.107143"></Warp>
+              <Warp time="75.500000" contentTime="35.535714"></Warp>
+              <Warp time="76.500000" contentTime="35.964286"></Warp>
+              <Warp time="78.833333" contentTime="36.964286"></Warp>
+            </Warps>
+          </Clip>
+        </Clips>
+      </Lanes>
+      <Lanes track="track-bass" id="lanes-bass">
+        <Clips id="clips-bass">
+          <Clip time="3.500000" duration="78.833333" playStart="0.000000" name="Bass">
+            <Warps contentTimeUnit="seconds" timeUnit="beats">
+              <Audio algorithm="stretch" channels="2" duration="36.964286" sampleRate="48000">
+                <File path="audio/bass.wav"></File>
+              </Audio>
+              <Warp time="0.000000" contentTime="0.000000"></Warp>
+              <Warp time="0.500000" contentTime="0.250000"></Warp>
+              <Warp time="1.500000" contentTime="0.750000"></Warp>
+              <Warp time="2.500000" contentTime="1.250000"></Warp>
+              <Warp time="3.500000" contentTime="1.750000"></Warp>
+              <Warp time="4.500000" contentTime="2.250000"></Warp>
+              <Warp time="5.500000" contentTime="2.750000"></Warp>
+              <Warp time="6.500000" contentTime="3.250000"></Warp>
+              <Warp time="7.500000" contentTime="3.750000"></Warp>
+              <Warp time="8.500000" contentTime="4.250000"></Warp>
+              <Warp time="9.500000" contentTime="4.750000"></Warp>
+              <Warp time="10.500000" contentTime="5.250000"></Warp>
+              <Warp time="11.500000" contentTime="5.750000"></Warp>
+              <Warp time="12.500000" contentTime="6.250000"></Warp>
+              <Warp time="13.500000" contentTime="6.750000"></Warp>
+              <Warp time="14.500000" contentTime="7.250000"></Warp>
+              <Warp time="15.500000" contentTime="7.750000"></Warp>
+              <Warp time="16.500000" contentTime="8.250000"></Warp>
+              <Warp time="17.500000" contentTime="8.750000"></Warp>
+              <Warp time="18.500000" contentTime="9.250000"></Warp>
+              <Warp time="19.500000" contentTime="9.750000"></Warp>
+              <Warp time="20.500000" contentTime="10.250000"></Warp>
+              <Warp time="21.500000" contentTime="10.750000"></Warp>
+              <Warp time="22.500000" contentTime="11.250000"></Warp>
+              <Warp time="23.500000" contentTime="11.750000"></Warp>
+              <Warp time="24.500000" contentTime="12.250000"></Warp>
+              <Warp time="25.500000" contentTime="12.750000"></Warp>
+              <Warp time="26.500000" contentTime="13.250000"></Warp>
+              <Warp time="27.500000" contentTime="13.750000"></Warp>
+              <Warp time="28.500000" contentTime="14.250000"></Warp>
+              <Warp time="29.500000" contentTime="14.750000"></Warp>
+              <Warp time="30.500000" contentTime="15.250000"></Warp>
+              <Warp time="31.500000" contentTime="15.750000"></Warp>
+              <Warp time="32.500000" contentTime="16.250000"></Warp>
+              <Warp time="33.500000" contentTime="16.750000"></Warp>
+              <Warp time="34.500000" contentTime="17.250000"></Warp>
+              <Warp time="35.500000" contentTime="17.750000"></Warp>
+              <Warp time="36.500000" contentTime="18.250000"></Warp>
+              <Warp time="37.500000" contentTime="18.750000"></Warp>
+              <Warp time="38.500000" contentTime="19.250000"></Warp>
+              <Warp time="39.500000" contentTime="19.750000"></Warp>
+              <Warp time="40.500000" contentTime="20.250000"></Warp>
+              <Warp time="41.500000" contentTime="20.750000"></Warp>
+              <Warp time="42.500000" contentTime="21.250000"></Warp>
+              <Warp time="43.500000" contentTime="21.750000"></Warp>
+              <Warp time="44.500000" contentTime="22.250000"></Warp>
+              <Warp time="45.500000" contentTime="22.678571"></Warp>
+              <Warp time="46.500000" contentTime="23.107143"></Warp>
+              <Warp time="47.500000" contentTime="23.535714"></Warp>
+              <Warp time="48.500000" contentTime="23.964286"></Warp>
+              <Warp time="49.500000" contentTime="24.392857"></Warp>
+              <Warp time="50.500000" contentTime="24.821429"></Warp>
+              <Warp time="51.500000" contentTime="25.250000"></Warp>
+              <Warp time="52.500000" contentTime="25.678571"></Warp>
+              <Warp time="53.500000" contentTime="26.107143"></Warp>
+              <Warp time="54.500000" contentTime="26.535714"></Warp>
+              <Warp time="55.500000" contentTime="26.964286"></Warp>
+              <Warp time="56.500000" contentTime="27.392857"></Warp>
+              <Warp time="57.500000" contentTime="27.821429"></Warp>
+              <Warp time="58.500000" contentTime="28.250000"></Warp>
+              <Warp time="59.500000" contentTime="28.678571"></Warp>
+              <Warp time="60.500000" contentTime="29.107143"></Warp>
+              <Warp time="61.500000" contentTime="29.535714"></Warp>
+              <Warp time="62.500000" contentTime="29.964286"></Warp>
+              <Warp time="63.500000" contentTime="30.392857"></Warp>
+              <Warp time="64.500000" contentTime="30.821429"></Warp>
+              <Warp time="65.500000" contentTime="31.250000"></Warp>
+              <Warp time="66.500000" contentTime="31.678571"></Warp>
+              <Warp time="67.500000" contentTime="32.107143"></Warp>
+              <Warp time="68.500000" contentTime="32.535714"></Warp>
+              <Warp time="69.500000" contentTime="32.964286"></Warp>
+              <Warp time="70.500000" contentTime="33.392857"></Warp>
+              <Warp time="71.500000" contentTime="33.821429"></Warp>
+              <Warp time="72.500000" contentTime="34.250000"></Warp>
+              <Warp time="73.500000" contentTime="34.678571"></Warp>
+              <Warp time="74.500000" contentTime="35.107143"></Warp>
+              <Warp time="75.500000" contentTime="35.535714"></Warp>
+              <Warp time="76.500000" contentTime="35.964286"></Warp>
+              <Warp time="78.833333" contentTime="36.964286"></Warp>
+            </Warps>
+          </Clip>
+        </Clips>
+      </Lanes>
+      <Lanes track="track-bass-midi" id="lanes-bass-midi">
+        <Clips id="clips-bass-midi">
+          <Clip time="3.500000" duration="78.833333" playStart="0.000000" name="Bass MIDI">
+            <Notes id="notes-bass">
+              <Note time="0.500000" duration="0.900000" channel="0" key="40" vel="0.800000" rel="0.500000"></Note>
+              <Note time="1.500000" duration="0.900000" channel="0" key="41" vel="0.800000" rel="0.500000"></Note>
+              <Note time="2.500000" duration="0.900000" channel="0" key="42" vel="0.800000" rel="0.500000"></Note>
+              <Note time="3.500000" duration="0.900000" channel="0" key="43" vel="0.800000" rel="0.500000"></Note>
+              <Note time="4.500000" duration="0.900000" channel="0" key="44" vel="0.800000" rel="0.500000"></Note>
+              <Note time="5.500000" duration="0.900000" channel="0" key="45" vel="0.800000" rel="0.500000"></Note>
+              <Note time="6.500000" duration="0.900000" channel="0" key="46" vel="0.800000" rel="0.500000"></Note>
+              <Note time="7.500000" duration="0.900000" channel="0" key="47" vel="0.800000" rel="0.500000"></Note>
+              <Note time="8.500000" duration="0.900000" channel="0" key="48" vel="0.800000" rel="0.500000"></Note>
+              <Note time="9.500000" duration="0.900000" channel="0" key="49" vel="0.800000" rel="0.500000"></Note>
+              <Note time="10.500000" duration="0.900000" channel="0" key="50" vel="0.800000" rel="0.500000"></Note>
+              <Note time="11.500000" duration="0.900000" channel="0" key="51" vel="0.800000" rel="0.500000"></Note>
+              <Note time="12.500000" duration="0.900000" channel="0" key="40" vel="0.800000" rel="0.500000"></Note>
+              <Note time="13.500000" duration="0.900000" channel="0" key="41" vel="0.800000" rel="0.500000"></Note>
+              <Note time="14.500000" duration="0.900000" channel="0" key="42" vel="0.800000" rel="0.500000"></Note>
+              <Note time="15.500000" duration="0.900000" channel="0" key="43" vel="0.800000" rel="0.500000"></Note>
+              <Note time="16.500000" duration="0.900000" channel="0" key="44" vel="0.800000" rel="0.500000"></Note>
+              <Note time="17.500000" duration="0.900000" channel="0" key="45" vel="0.800000" rel="0.500000"></Note>
+              <Note time="18.500000" duration="0.900000" channel="0" key="46" vel="0.800000" rel="0.500000"></Note>
+              <Note time="19.500000" duration="0.900000" channel="0" key="47" vel="0.800000" rel="0.500000"></Note>
+              <Note time="20.500000" duration="0.900000" channel="0" key="48" vel="0.800000" rel="0.500000"></Note>
+              <Note time="21.500000" duration="0.900000" channel="0" key="49" vel="0.800000" rel="0.500000"></Note>
+              <Note time="22.500000" duration="0.900000" channel="0" key="50" vel="0.800000" rel="0.500000"></Note>
+              <Note time="23.500000" duration="0.900000" channel="0" key="51" vel="0.800000" rel="0.500000"></Note>
+              <Note time="24.500000" duration="0.900000" channel="0" key="40" vel="0.800000" rel="0.500000"></Note>
+              <Note time="25.500000" duration="0.900000" channel="0" key="41" vel="0.800000" rel="0.500000"></Note>
+              <Note time="26.500000" duration="0.900000" channel="0" key="42" vel="0.800000" rel="0.500000"></Note>
+              <Note time="27.500000" duration="0.900000" channel="0" key="43" vel="0.800000" rel="0.500000"></Note>
+              <Note time="28.500000" duration="0.900000" channel="0" key="44" vel="0.800000" rel="0.500000"></Note>
+              <Note time="29.500000" duration="0.900000" channel="0" key="45" vel="0.800000" rel="0.500000"></Note>
+              <Note time="30.500000" duration="0.900000" channel="0" key="46" vel="0.800000" rel="0.500000"></Note>
+              <Note time="31.500000" duration="0.900000" channel="0" key="47" vel="0.800000" rel="0.500000"></Note>
+              <Note time="32.500000" duration="0.900000" channel="0" key="48" vel="0.800000" rel="0.500000"></Note>
+              <Note time="33.500000" duration="0.900000" channel="0" key="49" vel="0.800000" rel="0.500000"></Note>
+              <Note time="34.500000" duration="0.900000" channel="0" key="50" vel="0.800000" rel="0.500000"></Note>
+              <Note time="35.500000" duration="0.900000" channel="0" key="51" vel="0.800000" rel="0.500000"></Note>
+              <Note time="36.500000" duration="0.900000" channel="0" key="40" vel="0.800000" rel="0.500000"></Note>
+              <Note time="37.500000" duration="0.900000" channel="0" key="41" vel="0.800000" rel="0.500000"></Note>
+              <Note time="38.500000" duration="0.900000" channel="0" key="42" vel="0.800000" rel="0.500000"></Note>
+              <Note time="39.500000" duration="0.900000" channel="0" key="43" vel="0.800000" rel="0.500000"></Note>
+              <Note time="40.500000" duration="0.900000" channel="0" key="44" vel="0.800000" rel="0.500000"></Note>
+              <Note time="41.500000" duration="0.900000" channel="0" key="45" vel="0.800000" rel="0.500000"></Note>
+              <Note time="42.500000" duration="0.900000" channel="0" key="46" vel="0.800000" rel="0.500000"></Note>
+              <Note time="43.500000" duration="0.900000" channel="0" key="47" vel="0.800000" rel="0.500000"></Note>
+              <Note time="44.500000" duration="0.900000" channel="0" key="48" vel="0.800000" rel="0.500000"></Note>
+              <Note time="45.500000" duration="0.900000" channel="0" key="49" vel="0.800000" rel="0.500000"></Note>
+              <Note time="46.500000" duration="0.900000" channel="0" key="50" vel="0.800000" rel="0.500000"></Note>
+              <Note time="47.500000" duration="0.900000" channel="0" key="51" vel="0.800000" rel="0.500000"></Note>
+              <Note time="48.500000" duration="0.900000" channel="0" key="40" vel="0.800000" rel="0.500000"></Note>
+              <Note time="49.500000" duration="0.900000" channel="0" key="41" vel="0.800000" rel="0.500000"></Note>
+              <Note time="50.500000" duration="0.900000" channel="0" key="42" vel="0.800000" rel="0.500000"></Note>
+              <Note time="51.500000" duration="0.900000" channel="0" key="43" vel="0.800000" rel="0.500000"></Note>
+              <Note time="52.500000" duration="0.900000" channel="0" key="44" vel="0.800000" rel="0.500000"></Note>
+              <Note time="53.500000" duration="0.900000" channel="0" key="45" vel="0.800000" rel="0.500000"></Note>
+              <Note time="54.500000" duration="0.900000" channel="0" key="46" vel="0.800000" rel="0.500000"></Note>
+              <Note time="55.500000" duration="0.900000" channel="0" key="47" vel="0.800000" rel="0.500000"></Note>
+              <Note time="56.500000" duration="0.900000" channel="0" key="48" vel="0.800000" rel="0.500000"></Note>
+              <Note time="57.500000" duration="0.900000" channel="0" key="49" vel="0.800000" rel="0.500000"></Note>
+              <Note time="58.500000" duration="0.900000" channel="0" key="50" vel="0.800000" rel="0.500000"></Note>
+              <Note time="59.500000" duration="0.900000" channel="0" key="51" vel="0.800000" rel="0.500000"></Note>
+              <Note time="60.500000" duration="0.900000" channel="0" key="40" vel="0.800000" rel="0.500000"></Note>
+              <Note time="61.500000" duration="0.900000" channel="0" key="41" vel="0.800000" rel="0.500000"></Note>
+              <Note time="62.500000" duration="0.900000" channel="0" key="42" vel="0.800000" rel="0.500000"></Note>
+              <Note time="63.500000" duration="0.900000" channel="0" key="43" vel="0.800000" rel="0.500000"></Note>
+              <Note time="64.500000" duration="0.900000" channel="0" key="44" vel="0.800000" rel="0.500000"></Note>
+              <Note time="65.500000" duration="0.900000" channel="0" key="45" vel="0.800000" rel="0.500000"></Note>
+              <Note time="66.500000" duration="0.900000" channel="0" key="46" vel="0.800000" rel="0.500000"></Note>
+              <Note time="67.500000" duration="0.900000" channel="0" key="47" vel="0.800000" rel="0.500000"></Note>
+              <Note time="68.500000" duration="0.900000" channel="0" key="48" vel="0.800000" rel="0.500000"></Note>
+              <Note time="69.500000" duration="0.900000" channel="0" key="49" vel="0.800000" rel="0.500000"></Note>
+              <Note time="70.500000" duration="0.900000" channel="0" key="50" vel="0.800000" rel="0.500000"></Note>
+              <Note time="71.500000" duration="0.900000" channel="0" key="51" vel="0.800000" rel="0.500000"></Note>
+              <Note time="72.500000" duration="0.900000" channel="0" key="40" vel="0.800000" rel="0.500000"></Note>
+              <Note time="73.500000" duration="0.900000" channel="0" key="41" vel="0.800000" rel="0.500000"></Note>
+              <Note time="74.500000" duration="0.900000" channel="0" key="42" vel="0.800000" rel="0.500000"></Note>
+              <Note time="75.500000" duration="0.900000" channel="0" key="43" vel="0.800000" rel="0.500000"></Note>
+            </Notes>
+          </Clip>
+        </Clips>
+      </Lanes>
+      <Lanes track="track-drums-midi" id="lanes-drums-midi">
+        <Clips id="clips-drums-midi">
+          <Clip time="3.500000" duration="78.833333" playStart="0.000000" name="Drums MIDI">
+            <Notes id="notes-drums">
+              <Note time="0.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="2.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="4.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="6.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="8.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="10.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="12.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="14.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="16.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="18.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="20.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="22.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="24.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="26.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="28.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="30.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="32.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="34.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="35.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="37.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="38.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="40.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="41.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="43.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="44.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="46.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="48.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="50.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="52.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="54.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="56.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="58.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="60.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="62.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="64.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="66.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="68.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="70.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+              <Note time="72.500000" duration="0.250000" channel="9" key="36" vel="1.000000" rel="0.500000"></Note>
+              <Note time="74.500000" duration="0.250000" channel="9" key="38" vel="0.900000" rel="0.500000"></Note>
+            </Notes>
+          </Clip>
+        </Clips>
+      </Lanes>
+    </Lanes>
+    <Markers id="markers">
+      <Marker time="4.000000" name="Intro"></Marker>
+      <Marker time="36.000000" name="3/4 part" color="#FF0000"></Marker>
+      <Marker time="48.000000" name="140 BPM"></Marker>
+    </Markers>
+    <TempoAutomation unit="bpm" id="tempo-automation">
+      <Target parameter="tempo"></Target>
+      <RealPoint time="0.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="5.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="5.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="6.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="6.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="7.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="7.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="8.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="8.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="9.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="9.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="10.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="10.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="11.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="11.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="12.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="12.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="13.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="13.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="14.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="14.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="15.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="15.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="16.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="16.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="17.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="17.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="18.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="18.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="19.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="19.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="20.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="20.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="21.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="21.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="22.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="22.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="23.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="23.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="24.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="24.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="25.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="25.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="26.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="26.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="27.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="27.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="28.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="28.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="29.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="29.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="30.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="30.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="31.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="31.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="32.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="32.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="33.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="33.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="34.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="34.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="35.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="35.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="36.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="36.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="37.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="37.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="38.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="38.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="39.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="39.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="40.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="40.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="41.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="41.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="42.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="42.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="43.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="43.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="44.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="44.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="45.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="45.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="46.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="46.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="47.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="47.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="48.000000" value="120.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="48.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="49.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="49.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="50.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="50.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="51.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="51.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="52.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="52.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="53.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="53.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="54.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="54.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="55.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="55.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="56.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="56.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="57.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="57.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="58.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="58.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="59.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="59.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="60.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="60.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="61.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="61.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="62.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="62.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="63.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="63.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="64.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="64.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="65.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="65.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="66.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="66.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="67.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="67.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="68.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="68.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="69.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="69.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="70.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="70.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="71.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="71.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="72.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="72.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="73.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="73.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="74.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="74.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="75.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="75.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="76.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="76.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="77.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="77.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="78.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="78.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="79.000000" value="140.000000" interpolation="linear"></RealPoint>
+      <RealPoint time="79.000000" value="140.000000" interpolation="linear"></RealPoint>
+    </TempoAutomation>
+    <TimeSignatureAutomation id="timesig-automation">
+      <Target parameter="timesig"></Target>
+      <TimeSignaturePoint time="4.000000" numerator="4" denominator="4"></TimeSignaturePoint>
+      <TimeSignaturePoint time="36.000000" numerator="3" denominator="4"></TimeSignaturePoint>
+      <TimeSignaturePoint time="48.000000" numerator="4" denominator="4"></TimeSignaturePoint>
+    </TimeSignatureAutomation>
+  </Arrangement>
+</Project>
