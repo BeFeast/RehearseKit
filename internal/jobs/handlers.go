@@ -24,6 +24,9 @@ type Options struct {
 	MaxUploadBytes int64
 	AnonRetention  time.Duration
 	UserRetention  time.Duration
+	// TranscribeAllowed reports whether a signed-in email may set
+	// transcribe=1; nil disables the option for everyone.
+	TranscribeAllowed func(email string) bool
 }
 
 // Handlers serves /api/v1/jobs*.
@@ -176,6 +179,20 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := CreateParams{Quality: quality}
+	if t := fields["transcribe"]; t == "1" || strings.EqualFold(t, "true") {
+		u := auth.UserFrom(r.Context())
+		if u == nil || h.opts.TranscribeAllowed == nil || !h.opts.TranscribeAllowed(u.Email) {
+			cleanup()
+			respond.Failf(w, http.StatusForbidden, "transcribe_not_allowed", "transcription is not enabled for this account")
+			return
+		}
+		if quality != QualityHigh6 {
+			cleanup()
+			respond.Failf(w, http.StatusBadRequest, "transcribe_requires_high6", "transcription needs the high6 quality (guitar and piano stems)")
+			return
+		}
+		p.Transcribe = true
+	}
 	if gotFile {
 		p.InputType = InputUpload
 		p.SourceFilename = &filename

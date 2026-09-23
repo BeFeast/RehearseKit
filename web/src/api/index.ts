@@ -66,6 +66,8 @@ export interface CreateJobInput {
   input_url?: string;
   project_name?: string;
   quality: Quality;
+  /** Beat grid + MIDI; the server requires quality high6 and the feature. */
+  transcribe?: boolean;
 }
 
 export interface UploadProgress {
@@ -86,6 +88,7 @@ export function createJob(
   if (input.input_url) fd.append('input_url', input.input_url);
   if (input.project_name) fd.append('project_name', input.project_name);
   fd.append('quality', input.quality);
+  if (input.transcribe) fd.append('transcribe', '1');
   const xhr = new XMLHttpRequest();
   const promise = new Promise<Job>((resolve, reject) => {
     xhr.open('POST', `${API_BASE}/jobs`);

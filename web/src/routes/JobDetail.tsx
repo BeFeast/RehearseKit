@@ -5,7 +5,7 @@ import { ApiError, errorMessage } from '../api/client';
 import { subscribeJobEvents } from '../api/sse';
 import type { Job, JobEvent, JobStatus } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
-import { Progress, QualityBadge, Skeleton, StatusBadge } from '../components/Badge';
+import { Badge, Progress, QualityBadge, Skeleton, StatusBadge } from '../components/Badge';
 import { AppLink } from '../components/AppLink';
 import { ConfirmDialog } from '../components/Dialog';
 import { PanelNotice } from '../components/EmptyState';
@@ -175,6 +175,11 @@ function JobPage({ job, lastEvent, frozenAt }: { job: Job; lastEvent: JobEvent |
         <div className="rk-headactions">
           <StatusBadge status={job.status} />
           <QualityBadge quality={job.quality} />
+          {job.transcribe && (
+            <Badge tone="outline" title="Beat grid + MIDI in the package">
+              TRANSCRIBE
+            </Badge>
+          )}
           <button className="rk-btn rk-btn--primary" type="button" disabled={!completed} onClick={() => void download()} data-testid="download">
             Download Package
           </button>

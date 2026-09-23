@@ -67,6 +67,7 @@ web/                            the SPA (Vite + React); web/dist is embedded, se
 | `RK_DEMUCS_DEVICE` | `cpu` (worker) / `cuda` (agent) | demucs `-d` |
 | `RK_GPU_WAIT_TIMEOUT` | `3h` | a job waiting in `separating` with no runner ever leasing it fails after this (counted by the worker from when it first saw the job unleased; a lease restarts the clock) |
 | `RK_WORKER_SLOTS` | `2` | jobs the worker runs through the CPU stages (converting, analyzing) at once; also `rk worker -slots N` |
+| `RK_TRANSCRIBE_EMAILS` | empty | comma-separated accounts (case-insensitive) allowed to create `transcribe=1` jobs (beat grid + per-stem MIDI, owner-only); empty disables the option |
 | `RK_SCALER_*` | see [GPU autoscaler](#gpu-autoscaler-rk-gpu-scaler) | `rk gpu-scaler` policy, image, tunnel and state (runs on the vast.ai-facing host, not the server) |
 
 ## Run locally
@@ -328,10 +329,12 @@ curl -s $B/api/v1/config
 # sign in (cookie rk_session; HttpOnly, SameSite=Lax, Secure behind https)
 curl -s -c cj -H 'Content-Type: application/json' \
   -d '{"email":"admin@example.com","password":"change-me-please"}' $B/api/v1/auth/login
-curl -s -b cj $B/api/v1/auth/me
+curl -s -b cj $B/api/v1/auth/me   # {...user, "features": ["transcribe"]} — flags from RK_TRANSCRIBE_EMAILS
 
 # create a job from an upload (streams to $RK_DATA_DIR/jobs/<id>/source.mp3)
 curl -s -b cj -F file=@song.mp3 -F project_name=Song -F quality=high $B/api/v1/jobs
+# owner-only transcription (beat grid + MIDI in the package): needs quality=high6
+curl -s -b cj -F file=@song.mp3 -F quality=high6 -F transcribe=1 $B/api/v1/jobs
 # ... or from YouTube
 curl -s -b cj -F input_url='https://www.youtube.com/watch?v=...' $B/api/v1/jobs
 
@@ -383,6 +386,9 @@ Errors are always `{"code":"...","message":"..."}`. Notable codes:
 `pending_approval` (403 on login), `account_inactive` (403), `invalid_credentials` (401),
 `claim_token_required` (403), `expired` (410 for an anonymous link past
 `expires_at`), `too_large` (413), `already_finished` (409 on cancel).
+`transcribe_not_allowed` (403: `transcribe=1` without a session or from an
+account outside `RK_TRANSCRIBE_EMAILS`), `transcribe_requires_high6` (400:
+`transcribe=1` with another quality).
 
 ## Auth
 

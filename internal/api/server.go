@@ -45,9 +45,10 @@ func New(cfg config.Config, pool *pgxpool.Pool) (*Server, error) {
 	jobStore := jobs.NewStore(pool)
 	broker := jobs.NewBroker(pool)
 	jobHandlers := jobs.NewHandlers(jobStore, layout, broker, jobs.Options{
-		MaxUploadBytes: cfg.MaxUploadBytes,
-		AnonRetention:  cfg.AnonRetention,
-		UserRetention:  cfg.JobRetention,
+		MaxUploadBytes:    cfg.MaxUploadBytes,
+		AnonRetention:     cfg.AnonRetention,
+		UserRetention:     cfg.JobRetention,
+		TranscribeAllowed: cfg.TranscribeAllowed,
 	})
 
 	mux := http.NewServeMux()
@@ -72,7 +73,9 @@ func New(cfg config.Config, pool *pgxpool.Pool) (*Server, error) {
 	if cfg.GoogleClientID != "" {
 		google = googleid.New(googleid.Options{ClientID: cfg.GoogleClientID, JWKSURL: cfg.GoogleJWKSURL})
 	}
-	auth.NewHandlers(authStore, google).Register(mux)
+	auth.NewHandlers(authStore, google, auth.Options{
+		Features: func(u *auth.User) []string { return cfg.Features(u.Email) },
+	}).Register(mux)
 	jobHandlers.Register(mux)
 	stemHandlers := stems.NewHandlers(jobHandlers, layout)
 	stemHandlers.Register(mux)

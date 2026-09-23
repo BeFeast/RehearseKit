@@ -34,6 +34,8 @@ export interface Job {
   input_url: string | null;
   source_filename: string | null;
   quality: Quality;
+  /** Owner-only: beat grid + per-stem MIDI in the package. */
+  transcribe: boolean;
   status: JobStatus;
   stage_progress: number;
   error: string | null;
@@ -77,6 +79,8 @@ export interface User {
   status: UserStatus;
   created_at: string;
   last_login_at: string | null;
+  /** Feature flags enabled for this account (e.g. "transcribe"). */
+  features?: string[];
 }
 
 export interface QualityInfo {

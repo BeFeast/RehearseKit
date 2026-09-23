@@ -69,6 +69,30 @@ type Config struct {
 	// WorkerSlots is how many jobs the worker drives through the CPU stages
 	// (converting, analyzing) at once (RK_WORKER_SLOTS, default 2).
 	WorkerSlots int
+
+	// TranscribeEmails lists the accounts allowed to request transcription
+	// (beat grid + per-stem MIDI) on high6 jobs (RK_TRANSCRIBE_EMAILS,
+	// comma-separated, case-insensitive). Empty disables the feature.
+	TranscribeEmails []string
+}
+
+// TranscribeAllowed reports whether email may create transcribe jobs.
+func (c Config) TranscribeAllowed(email string) bool {
+	for _, e := range c.TranscribeEmails {
+		if strings.EqualFold(e, email) {
+			return true
+		}
+	}
+	return false
+}
+
+// Features lists the feature flags enabled for email (shown to the SPA).
+func (c Config) Features(email string) []string {
+	f := []string{}
+	if c.TranscribeAllowed(email) {
+		f = append(f, "transcribe")
+	}
+	return f
 }
 
 // Defaults returns the configuration used when no RK_* variables are set.
@@ -116,6 +140,13 @@ func FromEnv() (Config, error) {
 	cfg.TempoCmd = os.Getenv("RK_TEMPO_CMD")
 	cfg.LocalDemucs = os.Getenv("RK_LOCAL_DEMUCS") == "1"
 	cfg.DemucsDevice = os.Getenv("RK_DEMUCS_DEVICE")
+	if v := os.Getenv("RK_TRANSCRIBE_EMAILS"); v != "" {
+		for _, e := range strings.Split(v, ",") {
+			if e = strings.TrimSpace(e); e != "" {
+				cfg.TranscribeEmails = append(cfg.TranscribeEmails, e)
+			}
+		}
+	}
 	if v := os.Getenv("RK_CORS_ORIGINS"); v != "" {
 		for _, o := range strings.Split(v, ",") {
 			if o = strings.TrimSpace(o); o != "" {
