@@ -169,9 +169,23 @@ func (m *Map) buildBars(db []int) {
 func effectiveNumerators(counts []int) []int {
 	out := make([]int, len(counts))
 	copy(out, counts)
-	for i := 1; i < len(counts)-1; i++ {
-		n := out[i-1]
-		if counts[i] != n && counts[i+1] == n && counts[i]%n == 0 {
+	if len(counts) < 2 {
+		return out
+	}
+	for i := range counts {
+		var n int
+		switch {
+		case i == 0:
+			n = counts[1] // first bar: the following bar is the reference
+		case i == len(counts)-1:
+			n = out[i-1] // last bar: the preceding one
+		default:
+			n = out[i-1]
+			if counts[i+1] != n {
+				continue
+			}
+		}
+		if counts[i] != n && counts[i]%n == 0 {
 			out[i] = n
 		}
 	}

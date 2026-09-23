@@ -194,4 +194,11 @@ func TestTimeSignatures(t *testing.T) {
 	if !near(sigs[1].Beat, 8) {
 		t.Fatalf("3/4 at %v", sigs[1].Beat)
 	}
+	// Edges: a leading or trailing 8 next to 4s is a missed downbeat too.
+	if got := effectiveNumerators([]int{8, 4, 4, 8}); got[0] != 4 || got[3] != 4 {
+		t.Fatalf("edge merge %v", got)
+	}
+	if got := effectiveNumerators([]int{5, 4, 4, 3}); got[0] != 5 || got[3] != 3 {
+		t.Fatalf("edge non-multiple kept %v", got)
+	}
 }
