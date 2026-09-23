@@ -507,6 +507,60 @@ func TestJobCreateValidation(t *testing.T) {
 	}
 }
 
+func TestTranscribeGate(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.TranscribeEmails = []string{"Owner@Example.com"} })
+	anon := e.client()
+	resp, body, _ := e.upload(anon, 10, map[string]string{"transcribe": "1", "quality": "high6"})
+	if resp.StatusCode != 403 || errCode(body) != "transcribe_not_allowed" {
+		t.Errorf("anonymous: %d %s", resp.StatusCode, body)
+	}
+	e.createUser("other@example.com", auth.StatusActive)
+	other := e.client()
+	e.login(other, "other@example.com")
+	resp, body, _ = e.upload(other, 10, map[string]string{"transcribe": "true", "quality": "high6"})
+	if resp.StatusCode != 403 || errCode(body) != "transcribe_not_allowed" {
+		t.Errorf("not allow-listed: %d %s", resp.StatusCode, body)
+	}
+	_, body = e.do(other, "GET", "/api/v1/auth/me", nil, nil)
+	if !strings.Contains(string(body), `"features":[]`) {
+		t.Errorf("me without features: %s", body)
+	}
+	e.createUser("owner@example.com", auth.StatusActive)
+	owner := e.client()
+	resp, body = e.do(owner, "POST", "/api/v1/auth/login", map[string]string{"email": "owner@example.com", "password": "password123"}, nil)
+	if resp.StatusCode != 200 || !strings.Contains(string(body), `"features":["transcribe"]`) {
+		t.Fatalf("login features: %d %s", resp.StatusCode, body)
+	}
+	_, body = e.do(owner, "GET", "/api/v1/auth/me", nil, nil)
+	if !strings.Contains(string(body), `"features":["transcribe"]`) {
+		t.Errorf("me features: %s", body)
+	}
+	resp, body, _ = e.upload(owner, 10, map[string]string{"transcribe": "1", "quality": "high"})
+	if resp.StatusCode != 400 || errCode(body) != "transcribe_requires_high6" {
+		t.Errorf("high: %d %s", resp.StatusCode, body)
+	}
+	resp, body, _ = e.upload(owner, 10, map[string]string{"transcribe": "1", "quality": "high6"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("owner high6: %d %s", resp.StatusCode, body)
+	}
+	j := decodeJob(t, body)
+	if !j.Transcribe || j.Quality != "high6" {
+		t.Errorf("job: %+v", j)
+	}
+	_, body = e.do(owner, "GET", "/api/v1/jobs/"+j.ID, nil, nil)
+	if !strings.Contains(string(body), `"transcribe":true`) {
+		t.Errorf("get job: %s", body)
+	}
+	resp, body, _ = e.upload(owner, 10, map[string]string{"quality": "high6"})
+	if resp.StatusCode != 201 || decodeJob(t, body).Transcribe {
+		t.Errorf("without the flag: %d %s", resp.StatusCode, body)
+	}
+	entries, _ := os.ReadDir(filepath.Join(e.dataDir, "jobs"))
+	if len(entries) != 2 {
+		t.Errorf("rejected uploads left job dirs behind: %d", len(entries))
+	}
+}
+
 func TestAnonymousJobAndClaim(t *testing.T) {
 	e := newEnv(t, nil)
 	e.createUser("owner@example.com", auth.StatusActive)

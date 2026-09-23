@@ -70,6 +70,7 @@ type Job struct {
 	InputURL        *string    `json:"input_url"`
 	SourceFilename  *string    `json:"source_filename"`
 	Quality         string     `json:"quality"`
+	Transcribe      bool       `json:"transcribe"`
 	Status          string     `json:"status"`
 	StageProgress   int16      `json:"stage_progress"`
 	Error           *string    `json:"error"`

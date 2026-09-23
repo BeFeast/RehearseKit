@@ -37,13 +37,13 @@ func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 
 const jobColumns = `id, owner_id, claim_token_hash, project_name, input_type, input_url, source_filename, quality,
 	status, stage_progress, error, detected_bpm, duration_seconds, sample_rate, channels,
-	created_at, started_at, completed_at, expires_at`
+	created_at, started_at, completed_at, expires_at, transcribe`
 
 func scanJob(row pgx.Row) (*Job, error) {
 	var j Job
 	err := row.Scan(&j.ID, &j.OwnerID, &j.claimTokenHash, &j.ProjectName, &j.InputType, &j.InputURL, &j.SourceFilename,
 		&j.Quality, &j.Status, &j.StageProgress, &j.Error, &j.DetectedBPM, &j.DurationSeconds, &j.SampleRate, &j.Channels,
-		&j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.ExpiresAt)
+		&j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.ExpiresAt, &j.Transcribe)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -88,6 +88,7 @@ type CreateParams struct {
 	InputURL       *string
 	SourceFilename *string
 	Quality        string
+	Transcribe     bool
 	ExpiresAt      time.Time
 }
 
@@ -100,10 +101,10 @@ func (s *Store) Create(ctx context.Context, id string, p CreateParams) (*Job, er
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 	j, err := scanJob(tx.QueryRow(ctx, `INSERT INTO jobs
-		(id, owner_id, claim_token_hash, project_name, input_type, input_url, source_filename, quality, status, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9)
+		(id, owner_id, claim_token_hash, project_name, input_type, input_url, source_filename, quality, status, expires_at, transcribe)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $10)
 		RETURNING `+jobColumns,
-		id, p.OwnerID, p.ClaimTokenHash, p.ProjectName, p.InputType, p.InputURL, p.SourceFilename, p.Quality, p.ExpiresAt))
+		id, p.OwnerID, p.ClaimTokenHash, p.ProjectName, p.InputType, p.InputURL, p.SourceFilename, p.Quality, p.ExpiresAt, p.Transcribe))
 	if err != nil {
 		return nil, err
 	}

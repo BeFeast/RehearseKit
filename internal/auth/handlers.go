@@ -15,12 +15,37 @@ import (
 type Handlers struct {
 	store          *Store
 	googleVerifier *googleid.Verifier // nil when RK_GOOGLE_CLIENT_ID is unset
+	opts           Options
+}
+
+// Options tunes the handlers.
+type Options struct {
+	// Features lists the feature flags for a user, returned as "features"
+	// on every response that carries the user (/auth/me, login, register,
+	// google). Nil means no features.
+	Features func(*User) []string
 }
 
 // NewHandlers builds the auth handlers. google may be nil, in which case
 // POST /api/v1/auth/google answers 501 google_not_configured.
-func NewHandlers(store *Store, google *googleid.Verifier) *Handlers {
-	return &Handlers{store: store, googleVerifier: google}
+func NewHandlers(store *Store, google *googleid.Verifier, opts Options) *Handlers {
+	return &Handlers{store: store, googleVerifier: google, opts: opts}
+}
+
+// userResponse is a user plus its feature flags, serialised flat.
+type userResponse struct {
+	*User
+	Features []string `json:"features"`
+}
+
+func (h *Handlers) user(u *User) userResponse {
+	f := []string{}
+	if h.opts.Features != nil && u != nil {
+		if got := h.opts.Features(u); got != nil {
+			f = got
+		}
+	}
+	return userResponse{User: u, Features: f}
 }
 
 // Register mounts the auth routes on mux. Paths are absolute.
@@ -86,7 +111,7 @@ func (h *Handlers) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	SetSessionCookie(w, r, sess)
-	respond.JSON(w, http.StatusOK, u)
+	respond.JSON(w, http.StatusOK, h.user(u))
 }
 
 // register creates a password account in the pending state; an admin has to
@@ -122,7 +147,7 @@ func (h *Handlers) register(w http.ResponseWriter, r *http.Request) {
 		respond.Fail(w, err)
 		return
 	}
-	respond.JSON(w, http.StatusCreated, u)
+	respond.JSON(w, http.StatusCreated, h.user(u))
 }
 
 func (h *Handlers) logout(w http.ResponseWriter, r *http.Request) {
@@ -137,16 +162,16 @@ func (h *Handlers) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) me(w http.ResponseWriter, r *http.Request) {
-	respond.JSON(w, http.StatusOK, UserFrom(r.Context()))
+	respond.JSON(w, http.StatusOK, h.user(UserFrom(r.Context())))
 }
 
 // statusDenied is the 403 envelope for pending accounts: the usual
 // {"code","message"} plus the user, so the SPA can show who is waiting on
 // /pending-approval without a session.
 type statusDenied struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	User    *User  `json:"user"`
+	Code    string       `json:"code"`
+	Message string       `json:"message"`
+	User    userResponse `json:"user"`
 }
 
 // google signs a user in with a Google Identity Services ID token
@@ -222,7 +247,7 @@ func (h *Handlers) googleSignIn(w http.ResponseWriter, r *http.Request) {
 	switch u.Status {
 	case StatusPending:
 		respond.JSON(w, http.StatusForbidden, statusDenied{
-			Code: "pending_approval", Message: "your account is waiting for admin approval", User: u,
+			Code: "pending_approval", Message: "your account is waiting for admin approval", User: h.user(u),
 		})
 		return
 	case StatusInactive:
@@ -235,7 +260,7 @@ func (h *Handlers) googleSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	SetSessionCookie(w, r, sess)
-	respond.JSON(w, http.StatusOK, u)
+	respond.JSON(w, http.StatusOK, h.user(u))
 }
 
 type usersPage struct {

@@ -12,19 +12,11 @@ import { useToast } from '../components/Toast';
 import { AudioPreview, describeFile, validateFile, type FileInfo } from '../components/upload/AudioPreview';
 import { Dropzone } from '../components/upload/Dropzone';
 import { UrlPreviewCard, isYouTubeUrl } from '../components/upload/UrlPreviewCard';
+import { QualityPicker, qualityHelp } from '../components/upload/QualityPicker';
 import { rememberClaim } from '../lib/claim-tokens';
 import { formatBytes, formatEta } from '../lib/format';
 
 type Mode = 'file' | 'url';
-
-const QUALITY_HELP: Record<Quality, string> = {
-  fast: 'Demucs standard — about 1 minute per song minute.',
-  high: 'Demucs HT — cleaner separation, about 3 minutes per song minute.',
-  high6: 'Demucs HT 6-source — adds guitar and piano stems, about 4 minutes per song minute.',
-};
-
-// Three segments still fit the control while labels stay under ~14 characters (README decision).
-const QUALITY_LABEL: Record<Quality, string> = { fast: 'FAST', high: 'HIGH QUALITY', high6: 'HQ \u00b7 6 STEMS' };
 
 const ONE_GB = 1024 * 1024 * 1024;
 
@@ -47,6 +39,8 @@ export function LandingRoute() {
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
   const [quality, setQuality] = useState<Quality>('high');
+  const [transcribe, setTranscribe] = useState(false);
+  const transcribeAvailable = user?.features?.includes('transcribe') ?? false;
   const [upload, setUpload] = useState<{ loaded: number; total: number; startedAt: number } | null>(null);
   const [creating, setCreating] = useState(false);
   const abortRef = useRef<(() => void) | null>(null);
@@ -122,6 +116,7 @@ export function LandingRoute() {
     if (!hasSource || creating) return;
     setCreating(true);
     const input: api.CreateJobInput = { quality, project_name: name.trim() || undefined };
+    if (transcribeAvailable && transcribe) input.transcribe = true;
     if (mode === 'file' && file) input.file = file;
     else input.input_url = url.trim();
     const started = Date.now();
@@ -289,16 +284,7 @@ export function LandingRoute() {
                   maxLength={200}
                 />
               </div>
-              <div className="rk-field">
-                <label id="qlabel">Processing quality</label>
-                <div className="rk-seg rk-seg--field" role="group" aria-labelledby="qlabel" aria-describedby="qhelp">
-                  {(['fast', 'high', 'high6'] as Quality[]).map((q) => (
-                    <button key={q} type="button" aria-pressed={quality === q} onClick={() => setQuality(q)}>
-                      {QUALITY_LABEL[q]}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <QualityPicker quality={quality} onQuality={setQuality} transcribeAvailable={transcribeAvailable} transcribe={transcribe} onTranscribe={setTranscribe} />
             </div>
 
             {mode === 'file' && file && <AudioPreview file={file} info={fileInfo} />}
@@ -306,7 +292,7 @@ export function LandingRoute() {
             <div className="rk-formfoot">
               <div className="rk-formfoot-help">
                 <span className="rk-help" id="qhelp" data-testid="quality-help">
-                  {QUALITY_HELP[quality]}
+                  {qualityHelp(quality, transcribeAvailable && transcribe)}
                 </span>
                 <span className="rk-help">
                   {mode === 'url'
