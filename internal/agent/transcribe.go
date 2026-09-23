@@ -183,9 +183,9 @@ func (a *Agent) transcribe(ctx context.Context, lease gpu.LeaseResponse, mix str
 	// 3. Sections (optional).
 	if ad := cfg.adapter("sections"); ad != "off" {
 		secPath := filepath.Join(dir, "sections.json")
-		stemsDir := filepath.Dir(stems[targets[0]])
-		if len(targets) == 0 {
-			stemsDir = dir
+		stemsDir := dir
+		if len(targets) > 0 {
+			stemsDir = filepath.Dir(stems[targets[0]])
 		}
 		err := a.runAdapter(ctx, cfg.SectionsTimeout, log, "sections_"+ad+".py", "--input", mix, "--output", secPath, "--stems", stemsDir, "--device", cfg.Device)
 		if err == nil {

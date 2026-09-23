@@ -402,12 +402,15 @@ func (r *run) transcription(proj *dawproject.Project) error {
 		return err
 	}
 	b, err := os.ReadFile(ap)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
 		if r.job.Transcribe {
-			r.log.Warn("transcribe job without analysis.json", "err", err)
+			r.log.Warn("transcribe job without analysis.json")
 			r.summary = &pack.TranscribeSummary{GridError: "runner delivered no analysis.json", Sections: -1}
 		}
 		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("analysis.json: %w", err)
 	}
 	res, err := analysis.Parse(b)
 	if err != nil {
