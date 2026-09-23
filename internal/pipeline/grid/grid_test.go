@@ -157,6 +157,33 @@ func TestClampAndClean(t *testing.T) {
 	}
 }
 
+// TestCleanDoubleTime uses the beat intervals Beat This! produced on a
+// 45 s Plini clip (92 BPM with double-time stretches): the cleaned grid
+// must sit at the song's beat, not alternate between 92 and 184 BPM.
+func TestCleanDoubleTime(t *testing.T) {
+	iv := []float64{0.46, 0.64, 0.66, 0.58, 0.64, 0.64, 0.32, 0.28, 0.58, 0.66, 0.66, 0.66, 0.86, 0.66, 0.66, 0.64, 0.62, 0.22, 0.68, 0.66, 0.64, 0.3, 0.58, 0.64, 0.34, 0.32, 0.64, 0.32, 0.34, 0.22, 0.36, 0.28, 0.36, 0.26, 0.9, 0.64, 0.68, 0.66, 0.66, 0.84}
+	beats := []float64{1.0}
+	for _, d := range iv {
+		beats = append(beats, beats[len(beats)-1]+d)
+	}
+	m, err := Build(beats, nil, beats[len(beats)-1]+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lo, hi := m.Range()
+	if lo < 55 || hi > 140 {
+		t.Fatalf("tempo range %.1f–%.1f after cleaning (dropped %d, filled %d): %v", lo, hi, m.Dropped, m.Filled, intervals(m.beats))
+	}
+	if m.Dropped < 8 {
+		t.Fatalf("expected the double-time beats dropped, got %d", m.Dropped)
+	}
+	for _, d := range intervals(m.beats) {
+		if d < 0.4 { // a half beat at 92 BPM is 0.33 s
+			t.Fatalf("interval %.2f survived cleaning", d)
+		}
+	}
+}
+
 func TestTimeSignatures(t *testing.T) {
 	// Bars of 4,4,3,3,4,4,8,4,4,5,4,4: 3/4 run kept, 8 merged (missed
 	// downbeat), isolated 5 kept.
