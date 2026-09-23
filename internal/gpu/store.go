@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -103,14 +104,14 @@ func (s *Store) Failures(ctx context.Context, jobID string) (int, error) {
 // unique index gpu_leases_one_active_idx rejects a second active lease
 // (the NOT EXISTS check alone is not re-evaluated after a lock wait), in
 // which case the claim is retried. Returns ErrNoJobs when nothing waits.
-func (s *Store) Claim(ctx context.Context, runnerID string) (*Lease, *jobs.Job, error) {
+func (s *Store) Claim(ctx context.Context, runnerID string, caps Capabilities) (*Lease, *jobs.Job, error) {
 	var (
 		l     *Lease
 		jobID string
 	)
 	for attempt := 0; ; attempt++ {
 		var err error
-		l, jobID, err = s.tryClaim(ctx, runnerID)
+		l, jobID, err = s.tryClaim(ctx, runnerID, caps)
 		if err == nil {
 			break
 		}
@@ -131,7 +132,9 @@ func (s *Store) Claim(ctx context.Context, runnerID string) (*Lease, *jobs.Job, 
 	return l, j, nil
 }
 
-func (s *Store) tryClaim(ctx context.Context, runnerID string) (*Lease, string, error) {
+// A transcribe job is only offered to a runner that advertises the
+// capability, so an older runner never leases work it cannot finish.
+func (s *Store) tryClaim(ctx context.Context, runnerID string, caps Capabilities) (*Lease, string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, "", err
@@ -140,10 +143,11 @@ func (s *Store) tryClaim(ctx context.Context, runnerID string) (*Lease, string, 
 	var jobID string
 	err = tx.QueryRow(ctx, `SELECT j.id FROM jobs j
 		WHERE j.status = 'separating'
+		  AND (NOT j.transcribe OR $2)
 		  AND NOT EXISTS (SELECT 1 FROM gpu_leases l WHERE l.job_id = j.id AND l.state = 'active')
 		  AND (SELECT count(*) FROM gpu_leases l WHERE l.job_id = j.id AND l.state IN ('failed', 'expired')) < $1
 		ORDER BY j.started_at NULLS LAST, j.created_at, j.id
-		FOR UPDATE OF j SKIP LOCKED LIMIT 1`, s.MaxFailures).Scan(&jobID)
+		FOR UPDATE OF j SKIP LOCKED LIMIT 1`, s.MaxFailures, caps.Transcribe).Scan(&jobID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, "", ErrNoJobs
 	}
@@ -180,7 +184,10 @@ func (s *Store) active(ctx context.Context, leaseID, runnerID string) (*Lease, e
 // separating band (28–76 %). When the job has left `separating` (cancelled,
 // or moved on) the lease is closed and ErrJobGone is returned so the
 // runner stops.
-func (s *Store) Heartbeat(ctx context.Context, leaseID, runnerID string, progress float64) (*Lease, error) {
+// stage selects the caption: StageTranscribing replaces the separation
+// copy once the runner is past the stems. Progress only moves forward, so
+// a runner must keep its transcription band above its separation band.
+func (s *Store) Heartbeat(ctx context.Context, leaseID, runnerID string, progress float64, stage string) (*Lease, error) {
 	if _, err := s.active(ctx, leaseID, runnerID); err != nil {
 		return nil, err
 	}
@@ -202,7 +209,11 @@ func (s *Store) Heartbeat(ctx context.Context, leaseID, runnerID string, progres
 	}
 	p := jobs.StageProgress(jobs.StatusSeparating, progress)
 	if p > current {
-		if err := jobs.Transition(ctx, s.pool, l.JobID, jobs.StatusSeparating, p, jobs.StatusMessage(jobs.StatusSeparating, p)); err != nil {
+		msg := jobs.StatusMessage(jobs.StatusSeparating, p)
+		if stage == StageTranscribing {
+			msg = "Transcribing stems to MIDI..."
+		}
+		if err := jobs.Transition(ctx, s.pool, l.JobID, jobs.StatusSeparating, p, msg); err != nil {
 			if errors.Is(err, jobs.ErrTerminal) {
 				return nil, ErrJobGone
 			}
@@ -212,13 +223,21 @@ func (s *Store) Heartbeat(ctx context.Context, leaseID, runnerID string, progres
 	return l, nil
 }
 
+// ArtifactVerifier checks one uploaded artefact on disk.
+type ArtifactVerifier func(ctx context.Context, jobID string, a ArtifactReport) error
+
 // Verifier checks one uploaded stem on disk (size, checksum, WAV format).
 type Verifier func(ctx context.Context, jobID string, st StemReport) error
 
 // Complete validates the reported stems against the job's model, runs
 // verify on each, moves the job to finalizing and closes the lease. On a
 // verification error the lease stays active so the runner can re-upload.
-func (s *Store) Complete(ctx context.Context, leaseID, runnerID string, reported []StemReport, verify Verifier) error {
+//
+// On a transcribe job the runner must also report the analysis artefact
+// (it always writes analysis.json, even when every adapter failed) and
+// may report notes/<stem> for the transcribed stems; on any other job no
+// artefacts are accepted. A verification failure is ErrBadArtifacts.
+func (s *Store) Complete(ctx context.Context, leaseID, runnerID string, reported []StemReport, artifacts []ArtifactReport, verify Verifier, verifyArtifact ArtifactVerifier) error {
 	l, err := s.active(ctx, leaseID, runnerID)
 	if err != nil {
 		return err
@@ -250,6 +269,9 @@ func (s *Store) Complete(ctx context.Context, leaseID, runnerID string, reported
 			}
 		}
 	}
+	if err := checkArtifacts(ctx, j, artifacts, verifyArtifact); err != nil {
+		return err
+	}
 	// Close the lease first, and only if it is still active: the sweeper may
 	// have expired it between the check above and here, in which case the
 	// failure policy has already run for it and this call must not act.
@@ -270,6 +292,50 @@ func (s *Store) Complete(ctx context.Context, leaseID, runnerID string, reported
 		return err
 	}
 	return nil
+}
+
+func checkArtifacts(ctx context.Context, j *jobs.Job, artifacts []ArtifactReport, verify ArtifactVerifier) error {
+	if !j.Transcribe {
+		if len(artifacts) > 0 {
+			return fmt.Errorf("%w: job is not a transcribe job", ErrBadArtifacts)
+		}
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, a := range artifacts {
+		if seen[a.Name] {
+			return fmt.Errorf("%w: duplicate %s", ErrBadArtifacts, a.Name)
+		}
+		seen[a.Name] = true
+		if !ValidArtifactName(a.Name) {
+			return fmt.Errorf("%w: unknown artifact %q", ErrBadArtifacts, a.Name)
+		}
+		if verify != nil {
+			if err := verify(ctx, j.ID, a); err != nil {
+				return fmt.Errorf("%w: %s: %v", ErrBadArtifacts, a.Name, err)
+			}
+		}
+	}
+	if !seen[ArtifactAnalysis] {
+		return fmt.Errorf("%w: missing %s", ErrBadArtifacts, ArtifactAnalysis)
+	}
+	return nil
+}
+
+// ValidArtifactName reports whether name is "analysis" or "notes/<stem>"
+// for a transcribed stem.
+func ValidArtifactName(name string) bool {
+	if name == ArtifactAnalysis {
+		return true
+	}
+	if stem, ok := strings.CutPrefix(name, ArtifactNotesPrefix); ok {
+		for _, s := range jobs.TranscribeStems {
+			if s == stem {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // close moves an active lease to state; ErrNotActive when it no longer is.

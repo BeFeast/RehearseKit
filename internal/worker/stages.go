@@ -12,9 +12,12 @@ import (
 	"time"
 
 	"github.com/BeFeast/RehearseKit/internal/jobs"
+	"github.com/BeFeast/RehearseKit/internal/pipeline/analysis"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/dawproject"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/demucs"
+	"github.com/BeFeast/RehearseKit/internal/pipeline/grid"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/media"
+	"github.com/BeFeast/RehearseKit/internal/pipeline/midi"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/pack"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/peaks"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/tempo"
@@ -44,6 +47,15 @@ type run struct {
 	handoff bool
 	// handedOff reports that run stopped at the GPU hand-off.
 	handedOff bool
+	// summary and midi carry the transcription result from finalize to
+	// pack (finalize recomputes them from disk on resume).
+	summary *pack.TranscribeSummary
+	midi    []string
+}
+
+func fileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
 }
 
 func (w *Worker) newRun(j *jobs.Job) (*run, error) {
@@ -289,6 +301,11 @@ func (r *run) separate(ctx context.Context) error {
 		}
 		return nil
 	}
+	if r.job.Transcribe {
+		// Local demucs has no adapters; finishing the job without
+		// analysis.json would silently drop the transcription.
+		return errors.New("Stem separation failed: transcription needs a GPU runner (RK_LOCAL_DEMUCS cannot transcribe)")
+	}
 	return r.separateLocal(ctx)
 }
 
@@ -366,8 +383,142 @@ func (r *run) finalize(ctx context.Context) error {
 		Name: r.job.ProjectName, BPM: r.tempo.BPM, DurationSeconds: r.info.Duration(),
 		SampleRate: wavcheck.SampleRate, Channels: wavcheck.Channels, Stems: dawStems, GeneratorVersion: "rk/3",
 	}
+	if err := r.transcription(&proj); err != nil {
+		return stageErr("Finalizing failed", err)
+	}
 	if err := dawproject.WriteFile(filepath.Join(r.dir, "project.dawproject"), proj); err != nil {
 		return stageErr("Finalizing failed", err)
+	}
+	return nil
+}
+
+// transcription reads analysis.json and notes/<stem>.json (uploaded by a
+// transcribe-capable runner) and adds the grid, markers and note tracks
+// to the project; it also writes midi/<stem>.mid. A missing analysis.json
+// means no transcription; a failed instrument is reported in the README.
+func (r *run) transcription(proj *dawproject.Project) error {
+	ap, err := r.w.layout.AnalysisPath(r.job.ID)
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(ap)
+	if err != nil {
+		if r.job.Transcribe {
+			r.log.Warn("transcribe job without analysis.json", "err", err)
+			r.summary = &pack.TranscribeSummary{GridError: "runner delivered no analysis.json", Sections: -1}
+		}
+		return nil
+	}
+	res, err := analysis.Parse(b)
+	if err != nil {
+		return err
+	}
+	sum := &pack.TranscribeSummary{Sections: -1}
+	r.summary = sum
+	var m *grid.Map
+	if res.Grid != nil {
+		m, err = grid.Build(res.Grid.Beats, res.Grid.Downbeats, r.info.Duration())
+		if err != nil {
+			r.log.Warn("grid unusable, single tempo kept", "err", err)
+			sum.GridError = err.Error()
+		}
+	} else {
+		sum.GridError = res.GridError
+		if sum.GridError == "" {
+			sum.GridError = "beat tracker produced no grid"
+		}
+	}
+	if m != nil {
+		proj.Grid = m
+		lo, hi := m.Range()
+		if m.Constant {
+			sum.Grid = fmt.Sprintf("%.2f BPM constant, %d beats, %d/4", m.BPM(), len(m.Beats()), m.Numerator())
+		} else {
+			sum.Grid = fmt.Sprintf("%.1f–%.1f BPM per beat, %d beats, %d bars", lo, hi, len(m.Beats()), len(m.Bars))
+		}
+		if m.Dropped+m.Filled > 0 {
+			sum.Grid += fmt.Sprintf(" (cleaned: %d dropped, %d filled)", m.Dropped, m.Filled)
+		}
+		r.log.Info("tempo map", "summary", sum.Grid)
+	}
+	beat := func(sec float64) float64 {
+		if m != nil {
+			return m.Beat(sec)
+		}
+		bpm := dawproject.DefaultBPM
+		if r.tempo.BPM != nil {
+			bpm = *r.tempo.BPM
+		}
+		return sec * bpm / 60
+	}
+	if len(res.Sections) > 0 {
+		sum.Sections = 0
+		for _, s := range res.Sections {
+			proj.Markers = append(proj.Markers, dawproject.Marker{Beat: beat(s.Start), Name: s.Label})
+			sum.Sections++
+		}
+	}
+	bpm := dawproject.DefaultBPM
+	if r.tempo.BPM != nil {
+		bpm = *r.tempo.BPM
+	}
+	for _, stem := range jobs.TranscribeStems {
+		in, ok := res.Instruments[stem]
+		if !ok {
+			continue
+		}
+		if in.Status != analysis.StatusOK {
+			sum.Instruments = append(sum.Instruments, fmt.Sprintf("%-8s %s: %s", stem+":", in.Status, in.Reason))
+			continue
+		}
+		np, err := r.w.layout.NotesPath(r.job.ID, stem)
+		if err != nil {
+			return err
+		}
+		nb, err := os.ReadFile(np)
+		if err != nil {
+			sum.Instruments = append(sum.Instruments, fmt.Sprintf("%-8s failed: notes file missing", stem+":"))
+			continue
+		}
+		notes, err := analysis.ParseNotes(nb)
+		if err != nil {
+			sum.Instruments = append(sum.Instruments, fmt.Sprintf("%-8s failed: %v", stem+":", err))
+			continue
+		}
+		track := dawproject.NoteTrack{Stem: stem}
+		mt := midi.Track{Name: dawproject.TrackName(stem)}
+		if stem == "drums" {
+			track.Channel, mt.Channel = 9, 9
+		}
+		for _, n := range notes.Notes {
+			start := beat(n.Onset)
+			dur := beat(n.Offset) - start
+			if stem == "drums" {
+				dur = 0.25 // a 16th: SD3 only needs the trigger
+			}
+			if dur < 1.0/32 {
+				dur = 1.0 / 32
+			}
+			track.Notes = append(track.Notes, dawproject.Note{Beat: start, Duration: dur, Key: n.Pitch, Velocity: n.Velocity})
+			mt.Notes = append(mt.Notes, midi.Note{Beat: start, Duration: dur, Key: n.Pitch, Velocity: n.Velocity})
+		}
+		mp, err := r.w.layout.MidiPath(r.job.ID, stem)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(mp), 0o755); err != nil {
+			return err
+		}
+		if err := midi.WriteFile(mp, m, bpm, mt); err != nil {
+			return fmt.Errorf("midi %s: %w", stem, err)
+		}
+		proj.NoteTracks = append(proj.NoteTracks, track)
+		r.midi = append(r.midi, stem)
+		desc := fmt.Sprintf("%-8s ok (%d notes, %s", stem+":", len(track.Notes), in.Adapter)
+		if in.Model != "" {
+			desc += " " + in.Model
+		}
+		sum.Instruments = append(sum.Instruments, desc+")")
 	}
 	return nil
 }
@@ -388,8 +539,21 @@ func (r *run) pack(ctx context.Context) error {
 	entries = append(entries,
 		pack.Entry{Name: "project.dawproject", Path: filepath.Join(r.dir, "project.dawproject")},
 		pack.Entry{Name: "tempo.json", Path: r.tempoJSON(), Compress: true},
+	)
+	if ap, _ := r.w.layout.AnalysisPath(r.job.ID); fileExists(ap) {
+		entries = append(entries, pack.Entry{Name: "analysis.json", Path: ap, Compress: true})
+	}
+	for _, stem := range r.midi {
+		mp, _ := r.w.layout.MidiPath(r.job.ID, stem)
+		entries = append(entries, pack.Entry{Name: "midi/" + stem + ".mid", Path: mp, Compress: true})
+		if np, _ := r.w.layout.NotesPath(r.job.ID, stem); fileExists(np) {
+			entries = append(entries, pack.Entry{Name: "notes/" + stem + ".json", Path: np, Compress: true})
+		}
+	}
+	entries = append(entries,
 		pack.Entry{Name: "README.txt", Compress: true, Data: pack.Readme(pack.ReadmeParams{
 			ProjectName: r.job.ProjectName, BPM: r.tempo.BPM, Duration: r.info.Duration(), Stems: r.stems, Model: r.model,
+			Transcribe: r.summary,
 		})},
 	)
 	if err := pack.WriteFile(filepath.Join(r.dir, "package.zip"), entries); err != nil {

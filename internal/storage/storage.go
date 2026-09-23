@@ -4,6 +4,9 @@
 //	jobs/<job_id>/source.wav         24-bit/48k after convert
 //	jobs/<job_id>/stems/<name>.wav
 //	jobs/<job_id>/peaks/<name>.pk
+//	jobs/<job_id>/analysis.json      transcription: beat grid, sections, per-instrument status (runner)
+//	jobs/<job_id>/notes/<name>.json   transcription: note events of one stem, seconds (runner)
+//	jobs/<job_id>/midi/<name>.mid     transcription: SMF written by the worker from notes + grid
 //	jobs/<job_id>/project.dawproject
 //	jobs/<job_id>/tempo.json
 //	jobs/<job_id>/package.zip
@@ -67,6 +70,39 @@ func (l Layout) StemPath(id, name string) (string, error) {
 		return "", fmt.Errorf("storage: invalid stem name %q", name)
 	}
 	return filepath.Join(dir, "stems", name+".wav"), nil
+}
+
+// AnalysisPath returns jobs/<id>/analysis.json (transcription artefact).
+func (l Layout) AnalysisPath(id string) (string, error) {
+	dir, err := l.JobDir(id)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "analysis.json"), nil
+}
+
+// NotesPath returns jobs/<id>/notes/<name>.json (note events of one stem).
+func (l Layout) NotesPath(id, name string) (string, error) {
+	dir, err := l.JobDir(id)
+	if err != nil {
+		return "", err
+	}
+	if !NamePattern.MatchString(name) {
+		return "", fmt.Errorf("storage: invalid stem name %q", name)
+	}
+	return filepath.Join(dir, "notes", name+".json"), nil
+}
+
+// MidiPath returns jobs/<id>/midi/<name>.mid.
+func (l Layout) MidiPath(id, name string) (string, error) {
+	dir, err := l.JobDir(id)
+	if err != nil {
+		return "", err
+	}
+	if !NamePattern.MatchString(name) {
+		return "", fmt.Errorf("storage: invalid stem name %q", name)
+	}
+	return filepath.Join(dir, "midi", name+".mid"), nil
 }
 
 // PeaksPath returns jobs/<id>/peaks/<name>.pk.

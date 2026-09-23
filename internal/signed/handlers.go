@@ -3,6 +3,7 @@ package signed
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
@@ -17,6 +18,9 @@ import (
 // MaxStemBytes caps one stem upload (2 GiB).
 const MaxStemBytes = 2 << 30
 
+// MaxArtifactBytes caps one JSON artefact upload (analysis.json, notes).
+const MaxArtifactBytes = 32 << 20
+
 // Paths of the signed endpoints, relative to the API root.
 const (
 	SourcePathPrefix = "/api/v1/signed/jobs/"
@@ -27,6 +31,12 @@ func SourcePath(jobID string) string { return SourcePathPrefix + jobID + "/sourc
 
 // StemPath is the request path for uploading one stem.
 func StemPath(jobID, name string) string { return SourcePathPrefix + jobID + "/stems/" + name }
+
+// AnalysisPath is the request path for uploading analysis.json.
+func AnalysisPath(jobID string) string { return SourcePathPrefix + jobID + "/analysis" }
+
+// NotesPath is the request path for uploading notes/<stem>.json.
+func NotesPath(jobID, stem string) string { return SourcePathPrefix + jobID + "/notes/" + stem }
 
 // Handlers serves the signed endpoints.
 type Handlers struct {
@@ -44,6 +54,83 @@ func (h *Handlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/signed/jobs/{id}/source", h.source)
 	mux.HandleFunc("HEAD /api/v1/signed/jobs/{id}/source", h.source)
 	mux.HandleFunc("PUT /api/v1/signed/jobs/{id}/stems/{name}", h.putStem)
+	mux.HandleFunc("PUT /api/v1/signed/jobs/{id}/analysis", h.putAnalysis)
+	mux.HandleFunc("PUT /api/v1/signed/jobs/{id}/notes/{name}", h.putNotes)
+}
+
+func (h *Handlers) putAnalysis(w http.ResponseWriter, r *http.Request) {
+	if !h.verify(w, r) {
+		return
+	}
+	path, err := h.layout.AnalysisPath(r.PathValue("id"))
+	if err != nil {
+		respond.Failf(w, http.StatusBadRequest, "invalid_job", "invalid job id")
+		return
+	}
+	h.putJSON(w, r, "analysis", path)
+}
+
+func (h *Handlers) putNotes(w http.ResponseWriter, r *http.Request) {
+	if !h.verify(w, r) {
+		return
+	}
+	path, err := h.layout.NotesPath(r.PathValue("id"), r.PathValue("name"))
+	if err != nil {
+		respond.Failf(w, http.StatusBadRequest, "invalid_stem", "invalid job id or stem name")
+		return
+	}
+	h.putJSON(w, r, "notes/"+r.PathValue("name"), path)
+}
+
+// putJSON stores a small JSON artefact (transcription output) at path:
+// Content-Length required and capped at MaxArtifactBytes, body must parse
+// as JSON, written via a temp file. Answers {"name","bytes","sha256"}.
+func (h *Handlers) putJSON(w http.ResponseWriter, r *http.Request, name, path string) {
+	if r.ContentLength < 0 {
+		respond.Failf(w, http.StatusLengthRequired, "length_required", "Content-Length is required")
+		return
+	}
+	if r.ContentLength == 0 {
+		respond.Failf(w, http.StatusBadRequest, "empty_body", "artifact upload is empty")
+		return
+	}
+	if r.ContentLength > MaxArtifactBytes {
+		respond.Failf(w, http.StatusRequestEntityTooLarge, "too_large", "artifact exceeds the 32 MiB limit")
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxArtifactBytes))
+	if err != nil {
+		respond.Failf(w, http.StatusBadRequest, "upload_failed", "could not read the artifact body: "+err.Error())
+		return
+	}
+	if int64(len(body)) != r.ContentLength {
+		respond.Failf(w, http.StatusBadRequest, "short_body", "body shorter than Content-Length")
+		return
+	}
+	if !json.Valid(body) {
+		respond.Failf(w, http.StatusBadRequest, "invalid_json", "artifact is not valid JSON")
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		respond.Fail(w, err)
+		return
+	}
+	tmp := path + ".part"
+	if err := os.WriteFile(tmp, body, 0o644); err != nil {
+		respond.Fail(w, err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		respond.Fail(w, err)
+		return
+	}
+	sum := sha256.Sum256(body)
+	respond.JSON(w, http.StatusCreated, map[string]any{
+		"name":   name,
+		"bytes":  len(body),
+		"sha256": hex.EncodeToString(sum[:]),
+	})
 }
 
 func (h *Handlers) verify(w http.ResponseWriter, r *http.Request) bool {

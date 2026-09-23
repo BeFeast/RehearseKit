@@ -1,0 +1,14 @@
+# Transcription adapters for the GPU runner image (torch 2.2.0 / CUDA 12.1 / py3.10).
+# Keep numpy<2 and torch untouched: the base image ships torch 2.2.0.
+numpy<2
+torchaudio==2.2.0
+einops>=0.7,<0.9
+rotary-embedding-torch<0.9
+soxr
+soundfile>=0.12
+beat-this==1.1.0
+muscriptor==0.3.0
+huggingface-hub<1
+git+https://github.com/xavriley/ADTOF-pytorch@85c192e
+git+https://github.com/xavriley/hf_midi_transcription@96f6797
+mir_eval

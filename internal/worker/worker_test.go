@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -156,14 +157,14 @@ func deref(s *string) string {
 func (e *env) fakeRunner(jobID string) {
 	e.t.Helper()
 	ctx := context.Background()
-	l, j, err := e.gpu.Claim(ctx, "fake")
+	l, j, err := e.gpu.Claim(ctx, "fake", gpu.Capabilities{})
 	if err != nil {
 		e.t.Fatalf("fake runner claim: %v", err)
 	}
 	if j.ID != jobID {
 		e.t.Fatalf("fake runner got job %s, want %s", j.ID, jobID)
 	}
-	if _, err := e.gpu.Heartbeat(ctx, l.ID, "fake", 0.5); err != nil {
+	if _, err := e.gpu.Heartbeat(ctx, l.ID, "fake", 0.5, ""); err != nil {
 		e.t.Fatal(err)
 	}
 	_, stems := jobs.ModelFor(j.Quality)
@@ -178,7 +179,7 @@ func (e *env) fakeRunner(jobID string) {
 		st, _ := os.Stat(dst)
 		reports = append(reports, gpu.StemReport{Name: name, Bytes: st.Size()})
 	}
-	if err := e.gpu.Complete(ctx, l.ID, "fake", reports, nil); err != nil {
+	if err := e.gpu.Complete(ctx, l.ID, "fake", reports, nil, nil, nil); err != nil {
 		e.t.Fatalf("fake runner complete: %v", err)
 	}
 }
@@ -435,7 +436,7 @@ func TestGPUWaitClockResetsOnLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(200 * time.Millisecond)
-	l, _, err := e.gpu.Claim(ctx, "fake")
+	l, _, err := e.gpu.Claim(ctx, "fake", gpu.Capabilities{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +478,7 @@ func (e *env) runWorker(ctx context.Context) (stop func()) {
 func (e *env) fakeRunnerAny() string {
 	e.t.Helper()
 	ctx := context.Background()
-	l, j, err := e.gpu.Claim(ctx, "fake")
+	l, j, err := e.gpu.Claim(ctx, "fake", gpu.Capabilities{})
 	if err != nil {
 		e.t.Fatalf("fake runner claim: %v", err)
 	}
@@ -488,7 +489,7 @@ func (e *env) fakeRunnerAny() string {
 		st, _ := os.Stat(mustStemPath(e, j.ID, name))
 		reports = append(reports, gpu.StemReport{Name: name, Bytes: st.Size()})
 	}
-	if err := e.gpu.Complete(ctx, l.ID, "fake", reports, nil); err != nil {
+	if err := e.gpu.Complete(ctx, l.ID, "fake", reports, nil, nil, nil); err != nil {
 		e.t.Fatalf("fake runner complete: %v", err)
 	}
 	return j.ID
@@ -724,5 +725,173 @@ func TestRetentionSweep(t *testing.T) {
 	dir, _ := e.layout.JobDir(j.ID)
 	if _, err := os.Stat(dir); err == nil {
 		t.Fatal("expired job directory still on disk")
+	}
+}
+
+// fakeTranscribeRunner plays a transcribe-capable runner: stems as copies
+// of the source, a steady 120 BPM grid, notes for bass, a failed drums
+// adapter recorded in analysis.json.
+func (e *env) fakeTranscribeRunner(jobID string, seconds float64) {
+	e.t.Helper()
+	ctx := context.Background()
+	l, j, err := e.gpu.Claim(ctx, "fake", gpu.Capabilities{Transcribe: true})
+	if err != nil {
+		e.t.Fatalf("claim: %v", err)
+	}
+	if j.ID != jobID || !j.Transcribe {
+		e.t.Fatalf("got job %+v", j)
+	}
+	_, stems := jobs.ModelFor(j.Quality)
+	src := filepath.Join(filepath.Dir(mustStemPath(e, jobID, "vocals")), "..", "source.wav")
+	var reports []gpu.StemReport
+	for _, name := range stems {
+		dst := mustStemPath(e, jobID, name)
+		_ = os.MkdirAll(filepath.Dir(dst), 0o755)
+		if err := media.CopyFile(src, dst); err != nil {
+			e.t.Fatal(err)
+		}
+		st, _ := os.Stat(dst)
+		reports = append(reports, gpu.StemReport{Name: name, Bytes: st.Size()})
+	}
+	var beats, downs []float64
+	for t := 0.1; t < seconds; t += 0.5 {
+		beats = append(beats, t)
+		if len(beats)%4 == 1 {
+			downs = append(downs, t)
+		}
+	}
+	an := map[string]any{
+		"version":  1,
+		"grid":     map[string]any{"beats": beats, "downbeats": downs, "source": "fake"},
+		"sections": []map[string]any{{"start": 0.1, "end": seconds, "label": "Song"}},
+		"instruments": map[string]any{
+			"bass":  map[string]any{"status": "ok", "adapter": "fake", "notes": 2},
+			"drums": map[string]any{"status": "failed", "reason": "adapter timed out"},
+		},
+	}
+	ab, _ := json.Marshal(an)
+	ap, _ := e.layout.AnalysisPath(jobID)
+	if err := os.WriteFile(ap, ab, 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	nb := []byte(`{"stem":"bass","adapter":"fake","notes":[{"onset":0.1,"offset":0.5,"pitch":40,"velocity":0.9},{"onset":1.1,"offset":1.6,"pitch":43,"velocity":0.7}]}`)
+	np, _ := e.layout.NotesPath(jobID, "bass")
+	_ = os.MkdirAll(filepath.Dir(np), 0o755)
+	if err := os.WriteFile(np, nb, 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	arts := []gpu.ArtifactReport{{Name: gpu.ArtifactAnalysis, Bytes: int64(len(ab))}, {Name: "notes/bass", Bytes: int64(len(nb))}}
+	if err := e.gpu.Complete(ctx, l.ID, "fake", reports, arts, nil, nil); err != nil {
+		e.t.Fatalf("complete: %v", err)
+	}
+}
+
+func TestTranscribePipeline(t *testing.T) {
+	e := newEnv(t, nil)
+	j := e.upload(1, "wav", 4, jobs.QualityHigh6)
+	if _, err := e.pool.Exec(context.Background(), `UPDATE jobs SET transcribe = true WHERE id = $1`, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if _, err := e.w.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.waitStatus(j.ID, jobs.StatusSeparating, 30*time.Second)
+	// An old runner (no capability) is not offered the job.
+	if _, _, err := e.gpu.Claim(ctx, "old", gpu.Capabilities{}); err == nil {
+		t.Fatal("old runner leased a transcribe job")
+	}
+	e.fakeTranscribeRunner(j.ID, 4)
+	e.waitStatus(j.ID, jobs.StatusFinalizing, 5*time.Second)
+	if ran, err := e.w.ResumeOnce(ctx); err != nil || !ran {
+		t.Fatalf("ResumeOnce = %v, %v", ran, err)
+	}
+	e.waitStatus(j.ID, jobs.StatusCompleted, 10*time.Second)
+	dir, _ := e.layout.JobDir(j.ID)
+
+	// midi/bass.mid written, no midi for the failed drums.
+	if _, err := os.Stat(filepath.Join(dir, "midi", "bass.mid")); err != nil {
+		t.Fatalf("bass.mid: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "midi", "drums.mid")); err == nil {
+		t.Fatal("drums.mid should not exist")
+	}
+	// project.xml carries the tempo map, marker and the bass notes track.
+	zr, err := zip.OpenReader(filepath.Join(dir, "project.dawproject"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	var proj string
+	for _, f := range zr.File {
+		if f.Name == "project.xml" {
+			rc, _ := f.Open()
+			b, _ := io.ReadAll(rc)
+			rc.Close()
+			proj = string(b)
+		}
+	}
+	for _, want := range []string{`<Track contentType="notes" loaded="true" id="track-bass-midi"`, `<Marker time=`, `name="Song"`, `<Note time=`} {
+		if !strings.Contains(proj, want) {
+			t.Errorf("project.xml lacks %s", want)
+		}
+	}
+	// A steady grid → constant tempo, no automation lane; but the transport
+	// tempo is the grid's, not librosa's stub 136.5.
+	if strings.Contains(proj, "<TempoAutomation") || !strings.Contains(proj, `value="120.000000" id="tempo"`) {
+		t.Errorf("tempo: %s", proj[:600])
+	}
+	// package.zip has the transcription files and the README reports both instruments.
+	pz, err := zip.OpenReader(filepath.Join(dir, "package.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pz.Close()
+	names := map[string]bool{}
+	var readme string
+	for _, f := range pz.File {
+		names[f.Name] = true
+		if f.Name == "README.txt" {
+			rc, _ := f.Open()
+			b, _ := io.ReadAll(rc)
+			rc.Close()
+			readme = string(b)
+		}
+	}
+	for _, want := range []string{"midi/bass.mid", "analysis.json", "notes/bass.json", "project.dawproject"} {
+		if !names[want] {
+			t.Errorf("package lacks %s", want)
+		}
+	}
+	if names["midi/drums.mid"] {
+		t.Error("package has drums.mid")
+	}
+	for _, want := range []string{"TRANSCRIPTION", "bass:    ok (2 notes, fake)", "drums:   failed: adapter timed out", "120.00 BPM constant", "1 markers"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README lacks %q:\n%s", want, readme)
+		}
+	}
+}
+
+func TestLocalDemucsRefusesTranscribe(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.LocalDemucs = true })
+	j := e.upload(1, "wav", 1, jobs.QualityHigh6)
+	if _, err := e.pool.Exec(context.Background(), `UPDATE jobs SET transcribe = true WHERE id = $1`, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if _, err := e.w.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.waitStatus(j.ID, jobs.StatusSeparating, 30*time.Second)
+	if _, err := e.w.ResumeOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.waitStatus(j.ID, jobs.StatusFailed, 10*time.Second)
+	final, _ := e.store.Get(ctx, j.ID)
+	if final.Error == nil || !strings.Contains(*final.Error, "transcription needs a GPU runner") {
+		t.Fatalf("error %v", deref(final.Error))
 	}
 }

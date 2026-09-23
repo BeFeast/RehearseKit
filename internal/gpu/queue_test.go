@@ -49,7 +49,7 @@ func TestQueueStats(t *testing.T) {
 	}
 
 	// A claimed job leaves the waiting set and shows as an active lease.
-	l, _, err := e.store.Claim(ctx, "r1")
+	l, _, err := e.store.Claim(ctx, "r1", gpu.Capabilities{})
 	if err != nil {
 		t.Fatal(err)
 	}

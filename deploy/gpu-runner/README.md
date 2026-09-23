@@ -17,6 +17,44 @@ Base: `pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime` + ffmpeg + `demucs==4.0.1`
 with `htdemucs`, `htdemucs_ft` and `htdemucs_6s` pre-downloaded into
 `/models` (`TORCH_HOME`). The `rk` binary is built in a `golang:1.26` stage.
 
+### Transcription stack (tag `transcribe-s1` and later)
+
+The image also carries the beat grid + MIDI adapters (`tools/transcribe/`,
+copied to `/opt/rk/tools/transcribe`) and runs the agent with
+`RK_TRANSCRIBE=1`, so it advertises `X-Runner-Features: transcribe` and is
+offered transcribe jobs (an older `:latest` runner never sees them).
+Pins live in `requirements-transcribe.txt` (torch 2.2 / numpy<2):
+
+| Adapter | Package | Weights baked at build | Licence |
+|---|---|---|---|
+| grid: `beatthis` | `beat-this==1.1.0` (needs `rotary-embedding-torch<0.9`) | `/models/beat_this-final0.ckpt` (78 MB, cloud.cp.jku.at) | MIT |
+| drums: `adtof` | `xavriley/ADTOF-pytorch@85c192e` (5 classes → GM 36/38/42/48/49) | in the package (3.6 MB) | MIT |
+| guitar/bass/piano: `hfmidi` (default) | `xavriley/hf_midi_transcription@96f6797` | `/models/hf_midi/{guitar-gaps,filobass_20000_iterations,piano}.pth` (300 MB, HF `xavriley/midi-transcription-models`, not gated) | MIT |
+| guitar/bass/piano: `muscriptor` | `muscriptor==0.3.0` (later releases need torch ≥ 2.3) | **not downloaded by the build**: weights are CC BY-NC 4.0 and gated on HF; accept the licence, then on the build host `hf download MuScriptor/muscriptor-medium model.safetensors config.json --local-dir deploy/gpu-runner/models/muscriptor/medium` (gitignored) and rebuild. The token never enters the image | code MIT, weights CC BY-NC |
+| sections | none in S1 (`off`) | — | — |
+
+Adapter selection: `RK_ADAPTER_GRID`, `RK_ADAPTER_DRUMS`, `RK_ADAPTER_BASS`,
+`RK_ADAPTER_GUITAR`, `RK_ADAPTER_PIANO`, `RK_ADAPTER_SECTIONS` (`off` skips;
+`muscriptor` needs the baked weights, `RK_MUSCRIPTOR_SIZE=medium`,
+`RK_MUSCRIPTOR_DTYPE=bfloat16` on Ampere+). Each adapter runs under its own
+timeout (`RK_TRANSCRIBE_TIMEOUT_GRID` 5m, `RK_TRANSCRIBE_TIMEOUT_NOTES` 15m per
+stem); a failure is recorded in `analysis.json` (`"status": "failed"`, reason)
+and the job still completes with its stems — the runner never calls `/fail`
+for an adapter. `HF_HUB_OFFLINE=1` at runtime: nothing is fetched on a lease.
+
+Adapter CLI contract (also how to run one by hand inside the image):
+
+```bash
+python /opt/rk/tools/transcribe/grid_beatthis.py --input mix.wav --output grid.json --device cuda
+python /opt/rk/tools/transcribe/notes_hfmidi.py --input guitar.wav --output notes.json --stem guitar --device cuda
+python /opt/rk/tools/transcribe/drums_adtof.py  --input drums.wav  --output notes.json --stem drums  --device cuda
+```
+
+`grid.json` = `{"beats": [s], "downbeats": [s], "source", "model"}`; `notes.json` =
+`{"stem", "adapter", "model", "notes": [{"onset", "offset", "pitch", "velocity" 0..1}]}`
+(seconds, MIDI keys; GM drum notes for drums). Image size and pull time are
+recorded in the PR that introduced the tag.
+
 ## Configuration
 
 | Variable / flag | Meaning |
@@ -31,6 +69,11 @@ with `htdemucs`, `htdemucs_ft` and `htdemucs_6s` pre-downloaded into
 | `RK_WORK_DIR` / `--work-dir` | scratch (default `/work` in the image) |
 | `RK_POLL_INTERVAL` / `--poll` | idle poll (default `5s`) |
 | `RK_ONCE=1` / `--once` | process one job, then exit |
+| `RK_TRANSCRIBE=1` / `--transcribe` | advertise and run the transcription adapters (on in the image) |
+| `RK_TRANSCRIBE_TOOLS` / `--transcribe-tools` | adapter scripts directory (`/opt/rk/tools/transcribe` in the image) |
+| `RK_TRANSCRIBE_DEVICE` / `--transcribe-device` | adapters' device (default `--device`) |
+| `RK_ADAPTER_{GRID,DRUMS,BASS,GUITAR,PIANO,SECTIONS}` | adapter per stem: `beatthis`, `adtof`, `hfmidi`, `muscriptor`, `off` |
+| `RK_TRANSCRIBE_TIMEOUT_GRID` / `RK_TRANSCRIBE_TIMEOUT_NOTES` | per-adapter timeouts (5m / 15m) |
 
 ## vast.ai flow
 
