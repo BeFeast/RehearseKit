@@ -47,7 +47,7 @@ Adapter CLI contract (also how to run one by hand inside the image):
 ```bash
 python /opt/rk/tools/transcribe/grid_beatthis.py --input mix.wav --output grid.json --device cuda
 python /opt/rk/tools/transcribe/notes_hfmidi.py --input guitar.wav --output notes.json --stem guitar --device cuda
-python /opt/rk/tools/transcribe/drums_adtof.py  --input drums.wav  --output notes.json --stem drums  --device cuda
+python /opt/rk/tools/transcribe/notes_adtof.py  --input drums.wav  --output notes.json --stem drums  --device cuda
 ```
 
 `grid.json` = `{"beats": [s], "downbeats": [s], "source", "model"}`; `notes.json` =
