@@ -105,6 +105,7 @@ func trackBars(n int, down []int) (first int, nums []int) {
 					}
 					continue
 				}
+				// q < n here: the next bar starts on a beat, so cost[q] exists.
 				for l2 := minBar; l2 <= maxBar; l2++ {
 					r2, add := min(r+1, 2), 0.0
 					if l2 != l {
