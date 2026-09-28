@@ -44,6 +44,9 @@ class LabStreamProcessor extends AudioWorkletProcessor {
       if (msg && msg.type === 'flush') {
         Atomics.store(this.ctrl, this.C.READ_POS, 0);
         Atomics.store(this.ctrl, this.C.ENDED, 0);
+        // The clock pair belongs to the old stream; -1 marks it invalid
+        // until the first quantum of the new one is consumed.
+        if (this.C.CLOCK_FRAME !== undefined) Atomics.store(this.ctrl, this.C.CLOCK_FRAME, -1);
         this.port.postMessage({ type: 'flushed', generation: msg.generation });
       }
     };

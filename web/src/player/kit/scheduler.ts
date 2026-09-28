@@ -36,8 +36,12 @@ export interface SchedulerOptions {
   lateToleranceSeconds?: number;
 }
 
-const DEFAULT_LOOKAHEAD = 0.12;
-const DEFAULT_LATE = 0.03;
+// The tick runs on the main thread, which a busy page (canvas redraws at
+// 30 fps on a software renderer) can hold for well over 100 ms; the
+// lookahead must cover such a gap, and a hit that turns up late within the
+// tolerance is played at once rather than dropped.
+const DEFAULT_LOOKAHEAD = 0.35;
+const DEFAULT_LATE = 0.08;
 
 /**
  * Schedules the edited hits on the engine's audio clock while it plays.
@@ -58,6 +62,10 @@ export class KitScheduler {
   private queued: { voice: Voice; when: number; art: Articulation }[] = [];
   private lastOpenHat: { voice: Voice; when: number } | null = null;
   private lastUnderruns = 0;
+  /** Hits that fell behind the late tolerance before a tick ran (stats). */
+  skipped = 0;
+  /** The last queued hits (stats / scripts): song time, stream frame, context time. */
+  readonly recent: { art: Articulation; t: number; sf: number; when: number; now: number }[] = [];
   readonly lookahead: number;
   readonly late: number;
 
@@ -123,7 +131,14 @@ export class KitScheduler {
     }
     // Audio frame → stream frame, through the last published pair.
     const nowStream = c.readPos + (((c.ctxFrame - c.clockFrame) << 0) | 0);
-    if (this.cursor < 0 || this.cursor < nowStream - this.late * sr) this.cursor = nowStream;
+    // A late tick resumes from as far back as the tolerance allows: those
+    // hits play immediately instead of being skipped.
+    const floor = nowStream - Math.round(this.late * sr);
+    if (this.cursor < 0) this.cursor = nowStream;
+    else if (this.cursor < floor) {
+      this.skipped += Math.max(0, this.countBetween(plan, this.cursor, floor));
+      this.cursor = floor;
+    }
     const horizon = nowStream + Math.round(this.lookahead * sr);
     if (horizon <= this.cursor) return;
     // Walk the stream segments between cursor and horizon.
@@ -142,6 +157,21 @@ export class KitScheduler {
     if (this.queued.length && this.queued[0].when < cutoff) this.queued = this.queued.filter((q) => q.when >= cutoff);
   }
 
+  /** Hits between two stream frames (for the skipped counter). */
+  private countBetween(plan: PlayPlan, from: number, to: number): number {
+    let n = 0;
+    let pos = from;
+    while (pos < to) {
+      const chunk = plan.nextChunk(pos, to - pos);
+      if (!chunk) break;
+      const t0 = chunk.songStart / this.host.sampleRate;
+      const t1 = (chunk.songStart + chunk.frames) / this.host.sampleRate;
+      for (let i = lowerBound(this.hits, t0); i < this.hits.length && this.hits[i].t < t1; i++) if (!this.muted(this.hits[i].art)) n++;
+      pos = chunk.streamStart + chunk.frames;
+    }
+    return n;
+  }
+
   /** Queue hits with t in [t0, t1); streamOffset = streamFrame - songFrame for this segment. */
   private queueRange(t0: number, t1: number, streamOffset: number, nowStream: number, ctxNow: number, sr: number): void {
     const hits = this.hits;
@@ -155,6 +185,8 @@ export class KitScheduler {
       if (when < ctxNow - this.late) continue;
       const voice = this.host.play(h.art, velTo127(h.vel), Math.max(when, ctxNow));
       if (!voice) continue;
+      this.recent.push({ art: h.art, t: h.t, sf, when, now: ctxNow });
+      if (this.recent.length > 96) this.recent.splice(0, this.recent.length - 96);
       const entry = { voice, when, art: h.art };
       this.queued.push(entry);
       voice.onended = () => {

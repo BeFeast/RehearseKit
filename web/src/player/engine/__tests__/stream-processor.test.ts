@@ -172,6 +172,15 @@ describe('audio clock pair', () => {
     proc.process([], outputs);
     expect(rings.underruns()).toBe(1);
     expect(rings.clock()).toEqual({ readPos: 2 * QUANTUM, clockFrame: 4096 + 2 * QUANTUM });
+    // A flush invalidates the pair until the next consumed quantum.
+    proc.port.onmessage!({ data: { type: 'flush', generation: 7 } });
+    expect(rings.clock()).toBeNull();
+    expect(rings.readPos()).toBe(0);
+    rings.resetWriters();
+    rings.write(0, [ramp(QUANTUM), ramp(QUANTUM)], QUANTUM);
+    (globalThis as any).currentFrame = 9000;
+    proc.process([], outputs);
+    expect(rings.clock()).toEqual({ readPos: QUANTUM, clockFrame: 9000 + QUANTUM });
     delete (globalThis as any).currentFrame;
   });
 });

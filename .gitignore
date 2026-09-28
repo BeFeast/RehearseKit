@@ -91,6 +91,8 @@ infrastructure/**/*.tfvars
 *.wav
 *.mp3
 *.flac
+# the browser preview kit (CC0 subset, ~3 MB) ships with the SPA
+!web/public/kit/*.flac
 *.m4a
 *.ogg
 

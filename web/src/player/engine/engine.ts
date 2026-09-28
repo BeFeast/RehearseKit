@@ -205,9 +205,9 @@ export class StreamEngine {
     return this.aux;
   }
 
-  /** The current play plan (stream frame → song frame), null while stopped. */
+  /** The play plan the worklet is consuming (stream frame → song frame); null while stopped, priming or flushing. */
   get playPlan(): PlayPlan | null {
-    return this.isPlaying ? this.plan : null;
+    return this.stateValue === 'playing' && this.pendingFlush === null ? this.plan : null;
   }
 
   /** Increments on every seek/replan/stop; scheduled samples belong to one generation. */
@@ -221,8 +221,12 @@ export class StreamEngine {
    * unless playing with a plan.
    */
   clock(): { readPos: number; clockFrame: number; ctxTime: number; ctxFrame: number; generation: number; underruns: number } | null {
-    if (!this.ctx || !this.rings || !this.isPlaying || !this.plan) return null;
+    // Only while the worklet consumes the current plan: not during a
+    // flush (the plan is being replaced) nor while priming (the pair is
+    // reset), so a scheduler never maps against a dead stream.
+    if (!this.ctx || !this.rings || this.stateValue !== 'playing' || !this.plan || this.pendingFlush !== null) return null;
     const c = this.rings.clock();
+    if (!c) return null;
     return {
       ...c,
       ctxTime: this.ctx.currentTime,
@@ -439,6 +443,10 @@ export class StreamEngine {
     this.forcedMute[index] = on;
     this.applyGain(index);
     this.notify();
+  }
+
+  isForcedMuted(index: number): boolean {
+    return Boolean(this.forcedMute[index]);
   }
 
   setMute(index: number, muted: boolean): void {

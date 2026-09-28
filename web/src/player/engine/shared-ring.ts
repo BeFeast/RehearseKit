@@ -48,7 +48,7 @@ export class SharedRings {
    * again; a torn pair (the worklet ran in between) is retried once — a
    * one-quantum mismatch (128 frames) is the worst case after that.
    */
-  clock(): { readPos: number; clockFrame: number } {
+  clock(): { readPos: number; clockFrame: number } | null {
     let c1 = Atomics.load(this.ctrl, CTRL.CLOCK_FRAME);
     let r = Atomics.load(this.ctrl, CTRL.READ_POS);
     let c2 = Atomics.load(this.ctrl, CTRL.CLOCK_FRAME);
@@ -57,6 +57,8 @@ export class SharedRings {
       r = Atomics.load(this.ctrl, CTRL.READ_POS);
       c2 = Atomics.load(this.ctrl, CTRL.CLOCK_FRAME);
     }
+    // -1: flushed, no quantum of the new stream consumed yet.
+    if (c2 === -1) return null;
     return { readPos: r, clockFrame: c2 >>> 0 };
   }
 

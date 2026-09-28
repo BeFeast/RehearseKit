@@ -166,6 +166,24 @@ describe('KitScheduler', () => {
     expect(open2.stopped).toBeNull();
   });
 
+  it('a flush window (clock null, plan null) cancels queued voices and resumes on the new pair', () => {
+    const f = fakeHost();
+    const s = new KitScheduler(f.host, { lookaheadSeconds: 0.12 });
+    s.setHits([hit('a', 'kick', 1.0), hit('b', 'kick', 1.3)], () => false);
+    f.start(0.95, 10, null);
+    s.tick();
+    expect(f.played.length).toBe(1);
+    f.stop(); // engine reports nothing while flushing/priming
+    s.tick();
+    expect(f.played[0].stopped).not.toBeNull();
+    expect(s.pending).toBe(0);
+    f.start(1.25, 10, null); // the new stream arrives with its own pair
+    s.tick();
+    expect(f.played.length).toBe(2);
+    expect(f.played[1].art).toBe('kick');
+    expect(f.played[1].when).toBeCloseTo(f.ctxTime + 0.05, 6);
+  });
+
   it('lowerBound finds the first hit at or after t', () => {
     const hits = [hit('a', 'kick', 1), hit('b', 'kick', 2), hit('c', 'kick', 2), hit('d', 'kick', 3)];
     expect(lowerBound(hits, 0)).toBe(0);
