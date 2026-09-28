@@ -3,7 +3,10 @@ import { DIVISIONS } from '../../lib/drums/grid';
 import { primary } from '../../lib/drums/model';
 import type { Mixer } from '../../player/use-mixer';
 import { viewLabel, type DrumEditorHandle, type EditorTool } from '../../player/use-drum-editor';
+import { errorMessage } from '../../api/client';
+import { EditConflict } from '../../lib/drums/types';
 import { Icon } from '../Icon';
+import { useToast } from '../Toast';
 
 const TOOLS: { id: EditorTool; label: string; title: string }[] = [
   { id: 'select', label: 'SELECT', title: 'Select / move (1)' },
@@ -13,6 +16,7 @@ const TOOLS: { id: EditorTool; label: string; title: string }[] = [
 
 /** Transport row + tool row of the drum editor (design: DRUM EDITOR tab, top two bars). */
 export function EditorToolbar({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
+  const { toast } = useToast();
   const pos = m.live.current.position;
   const sel = ed.state.selection.length;
   const hasSel = sel > 0;
@@ -66,8 +70,25 @@ export function EditorToolbar({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
             </button>
           </div>
         </div>
-        <button className="rk-btn rk-btn--primary" type="button" onClick={() => void ed.exportNow()} disabled={ed.status !== 'ready' || ed.exporting || ed.autosave.status === 'conflict'} data-testid="drums-export">
-          Export MIDI + DAW
+        <button
+          className="rk-btn rk-btn--primary"
+          type="button"
+          onClick={() => {
+            ed.exportNow()
+              .then((rev) => rev !== null && toast({ kind: 'info', title: 'Export started', detail: `drums.mid + drums.dawproject from rev ${rev}.` }))
+              .catch((err: unknown) =>
+                toast({
+                  kind: 'error',
+                  title: err instanceof EditConflict ? 'The hits changed in another tab' : 'Export failed',
+                  detail: err instanceof EditConflict ? `Reload to export the latest revision (rev ${err.editRev}).` : errorMessage(err),
+                }),
+              );
+          }}
+          disabled={ed.status !== 'ready' || ed.exporting || ed.autosave.status === 'conflict' || ed.autosave.status === 'error'}
+          title={ed.autosave.status === 'error' ? 'The last save failed; edit again to retry before exporting' : undefined}
+          data-testid="drums-export"
+        >
+          {ed.exporting ? 'Exporting…' : 'Export MIDI + DAW'}
         </button>
       </div>
 

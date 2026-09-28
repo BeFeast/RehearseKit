@@ -86,7 +86,7 @@ export function DrumEditor({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
       </div>
       <div className="rk-drums-narrow" data-testid="drums-narrow">
         <PanelNotice art="processing" title="The drum editor needs a wider window" maxWidth="44ch">
-          Open this page at 900 px or wider to edit the drum hits. The mixer and the export still work here.
+          Open this page at 900 px or wider to edit and export the drum hits. The mixer still works here.
         </PanelNotice>
       </div>
     </>

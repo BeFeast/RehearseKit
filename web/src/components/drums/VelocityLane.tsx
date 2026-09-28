@@ -3,6 +3,7 @@ import { ARTICULATIONS, GROUP, velFrom127 } from '../../lib/drums/taxonomy';
 import type { DrumEvent } from '../../lib/drums/types';
 import type { Mixer } from '../../player/use-mixer';
 import type { DrumEditorHandle } from '../../player/use-drum-editor';
+import { useTheme } from '../../lib/use-theme';
 import { prepareCanvas, readPalette, useElementSize } from './canvas';
 
 const PAD = 4;
@@ -12,6 +13,7 @@ export function VelocityLane({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
   const host = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const { width, height } = useElementSize(host);
+  const theme = useTheme();
   const drawing = useRef(false);
   const { view, state, focus } = ed;
   const pos = m.live.current.position;
@@ -20,6 +22,7 @@ export function VelocityLane({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
   const selection = state.selection;
 
   useEffect(() => {
+    void theme; // redraw when the theme switches (colours come from CSS variables)
     const ctx = prepareCanvas(canvas.current, width, height);
     if (!ctx || !host.current) return;
     const pal = readPalette(host.current);
@@ -27,7 +30,7 @@ export function VelocityLane({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
     const h = height;
     const xOf = (t: number) => ((t - view.t0) / view.span) * w;
     for (const lv of [32, 64, 96]) {
-      ctx.fillStyle = 'rgba(0,0,0,.08)';
+      ctx.fillStyle = pal.line(0.08);
       ctx.fillRect(0, Math.round(PAD + (1 - lv / 127) * (h - 2 * PAD)), w, 1);
     }
     ctx.fillStyle = pal.inkMuted;
@@ -74,7 +77,7 @@ export function VelocityLane({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
       ctx.fillRect(Math.round(px) - 0.5, 0, 1.5, h);
       ctx.globalAlpha = 1;
     }
-  }, [width, height, view, hits, selection, focus, pos]);
+  }, [theme, width, height, view, hits, selection, focus, pos]);
 
   const apply = (e: ReactPointerEvent, first: boolean) => {
     const r = host.current!.getBoundingClientRect();

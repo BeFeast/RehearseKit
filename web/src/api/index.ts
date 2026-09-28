@@ -1,6 +1,7 @@
 import { ApiError, API_BASE, request } from './client';
 import type { Job, JobListStatus, MixPayload, Page, PublicConfig, Quality, User, YouTubePreview } from './types';
 import type { MixState } from '../lib/mix-state';
+import { claimFor } from '../lib/claim-tokens';
 import { EditConflict, type AnalysisSummary, type DrumEditsResponse, type DrumEvent, type DrumSaveResponse } from '../lib/drums/types';
 
 export type { MixPayload };
@@ -184,6 +185,39 @@ export async function putDrumEdits(id: string, baseRev: number, events: DrumEven
 }
 
 export const drumExportUrl = (id: string) => `${API_BASE}/jobs/${id}/drums/export`;
+
+/**
+ * POST the export and stop at the response headers: a 409/404/5xx arrives
+ * as a JSON error before any archive byte and is thrown (409 edit_conflict
+ * as EditConflict); a 200 is aborted, the download itself goes through the
+ * browser. The render the server caches makes the second request cheap.
+ */
+export async function checkDrumExport(id: string, editRev: number, fetchImpl: typeof fetch = (i, o) => fetch(i, o)): Promise<void> {
+  const ctl = new AbortController();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const tok = claimFor(id);
+  if (tok) headers['X-Claim-Token'] = tok;
+  try {
+    const res = await fetchImpl(drumExportUrl(id), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers,
+      body: JSON.stringify({ edit_rev: editRev }),
+      signal: ctl.signal,
+    });
+    if (res.ok) return;
+    let env: { code?: string; message?: string; edit_rev?: number } = {};
+    try {
+      env = (await res.json()) as typeof env;
+    } catch {
+      // not JSON
+    }
+    if (res.status === 409 && env.code === 'edit_conflict') throw new EditConflict(typeof env.edit_rev === 'number' ? env.edit_rev : editRev + 1);
+    throw new ApiError(res.status, env.code ?? '', env.message ?? res.statusText ?? 'export failed', res.headers.get('x-request-id'), env);
+  } finally {
+    ctl.abort();
+  }
+}
 
 // ---- youtube -------------------------------------------------------------
 

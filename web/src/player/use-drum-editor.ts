@@ -62,8 +62,8 @@ export interface DrumEditorHandle {
   autosave: AutosaveState;
   /** Reload the document from the server (after a conflict). */
   reload(): void;
-  /** Flush the autosave and download the export of the current revision. */
-  exportNow(): Promise<void>;
+  /** Flush the autosave and download the export of the saved revision; resolves to that revision (null when nothing was exported). */
+  exportNow(): Promise<number | null>;
   exporting: boolean;
   /** Snap helper honouring the SNAP toggle (force = ignore the toggle). */
   snapTime(t: number, force?: boolean): number;
@@ -172,7 +172,33 @@ export function useDrumEditor(m: Mixer, active: boolean, enabled = true): DrumEd
     };
   }, [jobId, duration, loadSeq, enabled]);
 
-  useEffect(() => () => autosaveRef.current?.dispose(), []);
+  // Leaving the editor must not lose an edit still in the debounce window:
+  // unmount sends it at once (the request outlives the component), a
+  // hidden tab flushes, and closing/reloading the page while a save is
+  // pending asks first (the job page is left with a full page load).
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') void autosaveRef.current?.flush();
+    };
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      const st = autosaveRef.current?.state;
+      if (!st || !(st.pendingChanges || st.status === 'saving')) return;
+      void autosaveRef.current?.flush();
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      const as = autosaveRef.current;
+      if (as) {
+        void as.flush();
+        as.dispose();
+      }
+    };
+  }, []);
 
   // Every change of the hits after the load is pushed to the autosave
   // (debounced there). The load itself is not a change: opening the page
@@ -276,7 +302,7 @@ export function useDrumEditor(m: Mixer, active: boolean, enabled = true): DrumEd
       redo: () => dispatch({ type: 'redo' }),
       deleteSel: () => dispatch({ type: 'delete' }),
       copy: () => dispatch({ type: 'copy' }),
-      paste: () => dispatch({ type: 'paste', at: snapTime(position(), true) }),
+      paste: () => dispatch({ type: 'paste', at: snapTime(position()) }),
       duplicate: () => {
         const sel = selectedHits(stateRef.current);
         if (sel.length === 0) return;
@@ -321,15 +347,21 @@ export function useDrumEditor(m: Mixer, active: boolean, enabled = true): DrumEd
   // ---- reload / export ---------------------------------------------------------
   const reload = useCallback(() => setLoadSeq((n) => n + 1), []);
 
-  const exportNow = useCallback(async () => {
+  const exportNow = useCallback(async (): Promise<number | null> => {
     const as = autosaveRef.current;
-    if (!as || status !== 'ready') return;
+    if (!as || status !== 'ready') return null;
     setExporting(true);
     try {
       await as.flush();
       if (as.state.status === 'conflict') throw new EditConflict(as.state.conflictRev ?? as.state.editRev);
       if (as.state.status === 'error') throw new Error(as.state.error ?? 'save failed');
-      submitExport(jobId, as.state.editRev);
+      const rev = as.state.editRev;
+      // Validate first: the server answers 409/404/5xx as JSON before any
+      // byte of the archive, so a fetch that stops at the headers surfaces
+      // the error here; only then the browser downloads natively.
+      await api.checkDrumExport(jobId, rev);
+      submitExport(jobId, rev);
+      return rev;
     } finally {
       setExporting(false);
     }
@@ -471,8 +503,8 @@ export { DIVISIONS, GROUPS };
 
 /**
  * Submit the export as a form POST into a hidden iframe: the browser
- * downloads the zip natively (no blob in memory for a 200 MB archive) and
- * a JSON error, if any, lands in the iframe where we can read it.
+ * downloads the zip natively (no blob in memory for a 200 MB archive).
+ * Errors were already surfaced by api.checkDrumExport.
  */
 function submitExport(jobId: string, editRev: number): void {
   const name = 'rk-export-frame';

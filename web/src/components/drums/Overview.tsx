@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { columnsFor } from '../../lib/peaks';
 import type { Mixer } from '../../player/use-mixer';
 import type { DrumEditorHandle } from '../../player/use-drum-editor';
+import { useTheme } from '../../lib/use-theme';
 import { prepareCanvas, readPalette, useElementSize } from './canvas';
 
 /** The whole drum stem in one strip with the loop, the viewport frame and the playhead; drag to scroll the view. */
@@ -9,6 +10,7 @@ export function Overview({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
   const host = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const { width, height } = useElementSize(host);
+  const theme = useTheme();
   const [dragging, setDragging] = useState(false);
   const drums = m.peaks.drums;
   const duration = m.duration;
@@ -17,6 +19,7 @@ export function Overview({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
   const loop = m.mix.loop;
 
   useEffect(() => {
+    void theme; // redraw when the theme switches (colours come from CSS variables)
     const ctx = prepareCanvas(canvas.current, width, height);
     if (!ctx || !host.current || duration <= 0) return;
     const pal = readPalette(host.current);
@@ -47,7 +50,7 @@ export function Overview({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
     ctx.strokeRect(vx + 0.75, 0.75, vw - 1.5, h - 1.5);
     ctx.fillStyle = pal.ink;
     ctx.fillRect((pos / duration) * w - 0.5, 0, 1.5, h);
-  }, [width, height, drums, duration, view, pos, loop]);
+  }, [theme, width, height, drums, duration, view, pos, loop]);
 
   const go = (e: ReactPointerEvent) => {
     const r = host.current!.getBoundingClientRect();

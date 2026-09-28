@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { formatTimecode } from '../../lib/format';
 import type { Mixer } from '../../player/use-mixer';
 import type { DrumEditorHandle } from '../../player/use-drum-editor';
+import { useTheme } from '../../lib/use-theme';
 import { prepareCanvas, readPalette, useElementSize } from './canvas';
 
 /** Bars/beats (from the grid) and seconds above the rows; click or drag to seek. */
@@ -9,12 +10,14 @@ export function Ruler({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
   const host = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const { width, height } = useElementSize(host);
+  const theme = useTheme();
   const [dragging, setDragging] = useState(false);
   const { view, grid } = ed;
   const pos = m.live.current.position;
   const loop = m.mix.loop;
 
   useEffect(() => {
+    void theme; // redraw when the theme switches (colours come from CSS variables)
     const ctx = prepareCanvas(canvas.current, width, height);
     if (!ctx || !host.current) return;
     const pal = readPalette(host.current);
@@ -30,7 +33,7 @@ export function Ruler({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
       for (const l of lines) {
         const x = Math.round(xOf(l.t));
         const isBar = l.kind === 'bar';
-        ctx.fillStyle = isBar ? 'rgba(0,0,0,.4)' : 'rgba(0,0,0,.18)';
+        ctx.fillStyle = isBar ? pal.line(0.4) : pal.line(0.18);
         ctx.fillRect(x, isBar ? 0 : 6, 1, isBar ? 14 : 8);
         const p = grid.position(l.t);
         if (!p) continue;
@@ -48,11 +51,11 @@ export function Ruler({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
     // Seconds.
     const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60];
     const step = steps.find((s) => (s / view.span) * w >= 56) ?? 60;
-    ctx.fillStyle = 'rgba(0,0,0,.16)';
+    ctx.fillStyle = pal.line(0.16);
     ctx.fillRect(0, 15, w, 1);
     for (let t = Math.ceil(view.t0 / step) * step; t <= t1; t += step) {
       const x = Math.round(xOf(t));
-      ctx.fillStyle = 'rgba(0,0,0,.25)';
+      ctx.fillStyle = pal.line(0.25);
       ctx.fillRect(x, 16, 1, 5);
       ctx.fillStyle = pal.inkMuted;
       ctx.font = '500 8px JetBrains Mono, monospace';
@@ -79,7 +82,7 @@ export function Ruler({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
       ctx.fill();
       ctx.fillRect(Math.round(px) - 0.5, 0, 1.5, h);
     }
-  }, [width, height, view, grid, pos, loop, m.mix.loopEnabled]);
+  }, [theme, width, height, view, grid, pos, loop, m.mix.loopEnabled]);
 
   const seekAt = (e: ReactPointerEvent) => {
     const r = host.current!.getBoundingClientRect();

@@ -387,7 +387,9 @@ function MixerPanel({ job, onDownload }: { job: Job; onDownload(): void }) {
   // tab strip at all.
   const editorPossible = Boolean(user && job.owner_id && user.id === job.owner_id && job.transcribe);
   const ed = useDrumEditor(m, editorPossible && search.tab === 'drums', editorPossible);
-  const showTabs = editorPossible && ed.status !== 'unavailable';
+  // The tab appears once the edits answered (no flash for a job whose drum
+  // transcription failed); a ?tab=drums link keeps it while loading.
+  const showTabs = editorPossible && (ed.status === 'ready' || ed.status === 'error' || (ed.status === 'loading' && search.tab === 'drums'));
   const tab: JobTab = showTabs && search.tab === 'drums' ? 'drums' : 'mixer';
   useKeyboard(m, tab === 'drums' ? ed : null);
 

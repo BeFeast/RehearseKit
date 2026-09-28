@@ -5,6 +5,7 @@ import { ARTICULATIONS, GROUPS, type Articulation } from '../../lib/drums/taxono
 import type { DrumEvent } from '../../lib/drums/types';
 import type { Mixer } from '../../player/use-mixer';
 import type { DrumEditorHandle } from '../../player/use-drum-editor';
+import { useTheme } from '../../lib/use-theme';
 import { diamond, prepareCanvas, readPalette, useElementSize } from './canvas';
 
 const HIT_SIZE = 5.5;
@@ -40,8 +41,16 @@ export function EditorCanvas({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
   const host = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const { width } = useElementSize(host);
+  const theme = useTheme();
   const height = ed.layout.total;
-  const [marquee, setMarquee] = useState<Marquee | null>(null);
+  const [marquee, setMarqueeState] = useState<Marquee | null>(null);
+  // The marquee is mirrored in a ref so pointerup reads the latest rectangle
+  // without a side effect inside a state updater.
+  const marqueeRef = useRef<Marquee | null>(null);
+  const setMarquee = (mq: Marquee | null) => {
+    marqueeRef.current = mq;
+    setMarqueeState(mq);
+  };
   const drag = useRef<Drag | null>(null);
   const lastAdd = useRef<{ at: number; x: number; y: number } | null>(null);
 
@@ -88,6 +97,7 @@ export function EditorCanvas({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
 
   // ---- drawing ------------------------------------------------------------------
   useEffect(() => {
+    void theme; // redraw when the theme switches (colours come from CSS variables)
     const ctx = prepareCanvas(canvas.current, width, height);
     if (!ctx || !host.current) return;
     const pal = readPalette(host.current);
@@ -97,7 +107,7 @@ export function EditorCanvas({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
     // Row backgrounds.
     for (const r of layout.rows) {
       if (r.type === 'midi') {
-        ctx.fillStyle = 'rgba(0,0,0,.05)';
+        ctx.fillStyle = pal.line(0.05);
         ctx.fillRect(0, r.y, w, r.h);
       }
       if (r.type !== 'audio' && r.group === ed.focus) {
@@ -106,10 +116,10 @@ export function EditorCanvas({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
       }
       if (r.type === 'group') {
         const n = GROUPS.find((g) => g.key === r.group)!.articulations.length;
-        ctx.fillStyle = 'rgba(0,0,0,.05)';
+        ctx.fillStyle = pal.line(0.05);
         for (let i = 1; i < n; i++) ctx.fillRect(0, r.y + (r.h * i) / n, w, 1);
       }
-      ctx.fillStyle = 'rgba(0,0,0,.14)';
+      ctx.fillStyle = pal.line(0.14);
       ctx.fillRect(0, r.y + r.h - 1, w, 1);
     }
 
@@ -120,13 +130,13 @@ export function EditorCanvas({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
       const pxPerLine = lines.length > 1 ? w / lines.length : w;
       for (const l of lines) {
         if (l.kind === 'sub' && pxPerLine < 4) continue;
-        ctx.fillStyle = l.kind === 'bar' ? 'rgba(0,0,0,.3)' : l.kind === 'beat' ? 'rgba(0,0,0,.16)' : 'rgba(0,0,0,.07)';
+        ctx.fillStyle = l.kind === 'bar' ? pal.line(0.3) : l.kind === 'beat' ? pal.line(0.16) : pal.line(0.07);
         ctx.fillRect(Math.round(xOf(l.t)), AUDIO_LANE_H, 1, height - AUDIO_LANE_H);
       }
     } else {
       const step = view.span > 20 ? 5 : 1;
       for (let t = Math.ceil(view.t0 / step) * step; t <= t1; t += step) {
-        ctx.fillStyle = t % 10 === 0 ? 'rgba(0,0,0,.3)' : 'rgba(0,0,0,.12)';
+        ctx.fillStyle = t % 10 === 0 ? pal.line(0.3) : pal.line(0.12);
         ctx.fillRect(Math.round(xOf(t)), AUDIO_LANE_H, 1, height - AUDIO_LANE_H);
       }
     }
@@ -153,13 +163,13 @@ export function EditorCanvas({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
         }
         ctx.globalAlpha = 1;
       }
-      ctx.fillStyle = 'rgba(0,0,0,.2)';
+      ctx.fillStyle = pal.line(0.2);
       ctx.fillRect(0, AUDIO_LANE_H / 2 - 0.5, w, 1);
     }
 
     // Loop shading outside the region.
     if (loop) {
-      ctx.fillStyle = loopOn ? 'rgba(0,0,0,.08)' : 'rgba(0,0,0,.04)';
+      ctx.fillStyle = loopOn ? pal.line(0.08) : pal.line(0.04);
       if (loop.start > view.t0) ctx.fillRect(0, 0, Math.max(0, Math.min(w, xOf(loop.start))), height);
       if (loop.end < t1) ctx.fillRect(Math.max(0, Math.min(w, xOf(loop.end))), 0, w, height);
     }
@@ -225,7 +235,7 @@ export function EditorCanvas({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
       ctx.fillStyle = pal.ink;
       ctx.fillRect(Math.round(px) - 0.5, 0, 1.5, height);
     }
-  }, [width, height, layout, view, grid, division, drums, loop, loopOn, state.hits, selSet, marquee, pos, ed.focus, ed.isRowMuted, hitXY, xOf, ed]);
+  }, [theme, width, height, layout, view, grid, division, drums, loop, loopOn, state.hits, selSet, marquee, pos, ed.focus, ed.isRowMuted, hitXY, xOf, ed]);
 
   // ---- wheel: pan, Ctrl+wheel zoom (non-passive) ----------------------------------
   useEffect(() => {
@@ -295,7 +305,12 @@ export function EditorCanvas({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
     let ids: string[];
     if (e.shiftKey) {
       ed.dispatch({ type: 'select', ids: [hit.id], mode: 'toggle' });
-      ids = state.selection.includes(hit.id) ? state.selection.filter((i) => i !== hit.id) : [...state.selection, hit.id];
+      if (state.selection.includes(hit.id)) {
+        // Shift-click took this hit out of the selection: nothing to drag.
+        drag.current = null;
+        return;
+      }
+      ids = [...state.selection, hit.id];
     } else if (!state.selection.includes(hit.id)) {
       ed.dispatch({ type: 'select', ids: [hit.id], mode: 'replace' });
       ids = [hit.id];
@@ -319,7 +334,8 @@ export function EditorCanvas({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
       return;
     }
     if (d.kind === 'marquee') {
-      setMarquee((mq) => (mq ? { ...mq, x1: x, y1: y } : mq));
+      const mq = marqueeRef.current;
+      if (mq) setMarquee({ ...mq, x1: x, y1: y });
       return;
     }
     if (!d.moved && Math.abs(x - d.startX) < 3 && Math.abs(y - d.startY) < 3) return;
@@ -347,23 +363,22 @@ export function EditorCanvas({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
       return;
     }
     if (d.kind === 'marquee') {
-      setMarquee((mq) => {
-        if (mq) {
-          const xa = Math.min(mq.x0, mq.x1);
-          const xb = Math.max(mq.x0, mq.x1);
-          const ya = Math.min(mq.y0, mq.y1);
-          const yb = Math.max(mq.y0, mq.y1);
-          if (xb - xa > 2 || yb - ya > 2) {
-            const ids: string[] = [];
-            for (const h of state.hits) {
-              const xy = hitXY(h);
-              if (xy && xy.x >= xa && xy.x <= xb && xy.y >= ya && xy.y <= yb) ids.push(h.id);
-            }
-            ed.dispatch({ type: 'select', ids: [...mq.keep, ...ids], mode: 'replace' });
+      const mq = marqueeRef.current;
+      setMarquee(null);
+      if (mq) {
+        const xa = Math.min(mq.x0, mq.x1);
+        const xb = Math.max(mq.x0, mq.x1);
+        const ya = Math.min(mq.y0, mq.y1);
+        const yb = Math.max(mq.y0, mq.y1);
+        if (xb - xa > 2 || yb - ya > 2) {
+          const ids: string[] = [];
+          for (const h of state.hits) {
+            const xy = hitXY(h);
+            if (xy && xy.x >= xa && xy.x <= xb && xy.y >= ya && xy.y <= yb) ids.push(h.id);
           }
+          ed.dispatch({ type: 'select', ids: [...mq.keep, ...ids], mode: 'replace' });
         }
-        return null;
-      });
+      }
       return;
     }
     if (d.moved) ed.dispatch({ type: 'gestureEnd' });

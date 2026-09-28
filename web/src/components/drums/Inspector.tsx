@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { describeAutosave } from '../../lib/drums/autosave';
 import { primary } from '../../lib/drums/model';
 import { ARTICULATION_KEYS, ARTICULATIONS, articulationTitle, midiKeyLabel, velTo127 } from '../../lib/drums/taxonomy';
@@ -38,17 +39,7 @@ export function Inspector({ ed }: { ed: DrumEditorHandle }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--rk-space-4)' }}>
             <label className="rk-drums-field">
               <span>TIME · S</span>
-              <input
-                type="number"
-                step={0.001}
-                min={0}
-                value={p.t.toFixed(3)}
-                onChange={(e) => {
-                  const t = Number(e.target.value);
-                  if (Number.isFinite(t)) ed.ops.setSelTime(t);
-                }}
-                data-testid="drums-sel-time"
-              />
+              <TimeField key={p.id} value={p.t} onCommit={ed.ops.setSelTime} />
             </label>
             <div className="rk-drums-field">
               <span>BAR.BEAT.TICK</span>
@@ -64,7 +55,20 @@ export function Inspector({ ed }: { ed: DrumEditorHandle }) {
                 {velTo127(p.vel)}
               </span>
             </div>
-            <input type="range" min={1} max={127} value={velTo127(p.vel)} onChange={(e) => ed.ops.setSelVel(Number(e.target.value))} aria-label="Velocity" />
+            <input
+              type="range"
+              min={1}
+              max={127}
+              value={velTo127(p.vel)}
+              // One undo step per drag or key press sequence, like the velocity lane.
+              onPointerDown={() => ed.dispatch({ type: 'gestureBegin' })}
+              onPointerUp={() => ed.dispatch({ type: 'gestureEnd' })}
+              onKeyDown={() => ed.dispatch({ type: 'gestureBegin' })}
+              onKeyUp={() => ed.dispatch({ type: 'gestureEnd' })}
+              onBlur={() => ed.dispatch({ type: 'gestureEnd' })}
+              onChange={(e) => ed.ops.setSelVel(Number(e.target.value))}
+              aria-label="Velocity"
+            />
           </label>
           <div className="rk-drums-kvbox">
             <div className="rk-drums-kv">
@@ -129,6 +133,45 @@ export function Inspector({ ed }: { ed: DrumEditorHandle }) {
         )}
       </div>
     </aside>
+  );
+}
+
+/**
+ * TIME · S: edits a draft while focused and commits once on blur or Enter
+ * (Escape reverts). An empty or unparsable draft never moves the hit.
+ */
+function TimeField({ value, onCommit }: { value: number; onCommit(t: number): void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => {
+    if (draft === null) return;
+    const raw = draft.trim();
+    const t = Number(raw);
+    setDraft(null);
+    if (raw !== '' && Number.isFinite(t) && t >= 0 && Math.abs(t - value) > 1e-9) onCommit(t);
+  };
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={draft ?? value.toFixed(3)}
+      onFocus={(e) => {
+        setDraft(value.toFixed(3));
+        e.currentTarget.select();
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          commit();
+          e.currentTarget.blur();
+        } else if (e.key === 'Escape') {
+          setDraft(null);
+          e.currentTarget.blur();
+        }
+      }}
+      aria-label="Time in seconds"
+      data-testid="drums-sel-time"
+    />
   );
 }
 
