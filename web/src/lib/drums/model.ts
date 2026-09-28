@@ -42,9 +42,11 @@ export interface EditorState {
   duration: number;
   /** Between gestureBegin and gestureEnd: hits changes share one history entry (pushed by the first change). */
   inGesture: boolean;
-  /** The hits when the gesture began (until its first change) and the change count to restore for a no-op gesture. */
+  /** The hits, history and change count when the gesture began, restored exactly for a gesture that nets no change. */
   gestureFrom: DrumEvent[] | null;
   gestureChanges: number;
+  gesturePast: DrumEvent[][] | null;
+  gestureFuture: DrumEvent[][] | null;
   /** Increments on every hits change, including undo/redo — the autosave watches it. */
   changes: number;
 }
@@ -121,6 +123,8 @@ export function initialEditor(duration: number, hits: DrumEvent[] = []): EditorS
     inGesture: false,
     gestureFrom: null,
     gestureChanges: 0,
+    gesturePast: null,
+    gestureFuture: null,
     changes: 0,
   };
 }
@@ -172,6 +176,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         inGesture: false,
         gestureFrom: null,
         gestureChanges: 0,
+        gesturePast: null,
+        gestureFuture: null,
         changes: state.changes + 1,
       };
 
@@ -234,22 +240,20 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (state.inGesture) return state;
       // The history entry is pushed by the first change inside the gesture
       // (commit), so a click that changes nothing costs no undo step.
-      return { ...state, inGesture: true, gestureFrom: state.hits, gestureChanges: state.changes };
+      return { ...state, inGesture: true, gestureFrom: state.hits, gestureChanges: state.changes, gesturePast: state.past, gestureFuture: state.future };
 
     case 'gestureEnd': {
       if (!state.inGesture) return state;
       const from = state.gestureFrom;
-      if (from === state.hits) return { ...state, inGesture: false, gestureFrom: null };
-      // A drag that came back to where it started: drop the entry and the change count.
+      const done = { inGesture: false, gestureFrom: null, gesturePast: null, gestureFuture: null };
+      if (from === state.hits) return { ...state, ...done };
+      // A drag that came back to where it started: restore the history as it
+      // was (including an entry the first change evicted at the cap) and the
+      // change count, so nothing is saved and no undo step is lost.
       if (from && sameHits(from, state.hits)) {
-        return { ...state, hits: from, past: state.past.slice(0, -1), inGesture: false, gestureFrom: null, changes: state.gestureChanges };
+        return { ...state, ...done, hits: from, past: state.gesturePast ?? state.past, future: state.gestureFuture ?? state.future, changes: state.gestureChanges };
       }
-      return {
-        ...state,
-        hits: isSorted(state.hits) ? state.hits : sortHits(state.hits.slice()),
-        inGesture: false,
-        gestureFrom: null,
-      };
+      return { ...state, ...done, hits: isSorted(state.hits) ? state.hits : sortHits(state.hits.slice()) };
     }
 
     case 'moveTo': {

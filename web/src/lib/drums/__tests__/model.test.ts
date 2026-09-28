@@ -536,3 +536,30 @@ describe('gesture edge cases', () => {
     expect(s.inGesture).toBe(false);
   });
 });
+
+describe('gesture rollback at the history cap', () => {
+  it('a drag that returns to its start keeps every undo step and the redo stack', () => {
+    let s = seeded();
+    for (let i = 0; i < HISTORY_LIMIT; i++) s = editorReducer(s, { type: 'add', art: 'kick', t: 0.01 * i, vel: 0.5 });
+    s = editorReducer(s, { type: 'undo' });
+    expect(s.past.length).toBe(HISTORY_LIMIT - 1);
+    s = editorReducer(s, { type: 'add', art: 'snare', t: 3, vel: 0.5 });
+    expect(s.past.length).toBe(HISTORY_LIMIT);
+    const pastBefore = s.past;
+    const oldest = s.past[0];
+    s = editorReducer(s, { type: 'undo' });
+    const futureBefore = s.future;
+    s = editorReducer(s, { type: 'redo' });
+    expect(s.past).toStrictEqual(pastBefore);
+    const past = s.past;
+    const base = { m3: { t: SEED[3].t, art: 'snare' as const } };
+    s = editorReducer(s, { type: 'gestureBegin' });
+    s = editorReducer(s, { type: 'moveTo', base, dt: 0.1, art: 'snare' });
+    expect(s.past[0]).not.toBe(oldest); // the first change evicted the oldest entry
+    s = editorReducer(s, { type: 'moveTo', base, dt: 0, art: 'snare' });
+    s = editorReducer(s, { type: 'gestureEnd' });
+    expect(s.past).toBe(past);
+    expect(s.past[0]).toBe(oldest);
+    expect(futureBefore.length).toBe(1);
+  });
+});
