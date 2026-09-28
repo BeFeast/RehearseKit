@@ -385,6 +385,9 @@ func TestSaveConcurrent(t *testing.T) {
 	if err != nil || d.EditRev != 1 {
 		t.Fatalf("after race: %+v %v", d, err)
 	}
+	if n := store.Locks(); n != 0 {
+		t.Fatalf("%d lock entries left after the race", n)
+	}
 }
 
 func TestSaveAfterJobRemoved(t *testing.T) {

@@ -32,24 +32,48 @@ type Store struct {
 	layout storage.Layout
 
 	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	locks map[string]*jobLock
+}
+
+// jobLock is one job's mutex with the number of holders and waiters, so
+// the entry can be dropped once nobody uses it (the map does not grow
+// with the number of jobs ever edited).
+type jobLock struct {
+	sync.Mutex
+	refs int
 }
 
 // NewStore builds a store over the data layout.
 func NewStore(layout storage.Layout) *Store {
-	return &Store{layout: layout, locks: map[string]*sync.Mutex{}}
+	return &Store{layout: layout, locks: map[string]*jobLock{}}
 }
 
-func (s *Store) lock(jobID string) func() {
+func (s *Store) lock(key string) func() {
 	s.mu.Lock()
-	l, ok := s.locks[jobID]
+	l, ok := s.locks[key]
 	if !ok {
-		l = &sync.Mutex{}
-		s.locks[jobID] = l
+		l = &jobLock{}
+		s.locks[key] = l
 	}
+	l.refs++
 	s.mu.Unlock()
 	l.Lock()
-	return l.Unlock
+	return func() {
+		l.Unlock()
+		s.mu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(s.locks, key)
+		}
+		s.mu.Unlock()
+	}
+}
+
+// Locks reports the live lock entries (tests).
+func (s *Store) Locks() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.locks)
 }
 
 // Load returns the saved document, or ErrNotFound.
@@ -142,13 +166,13 @@ func (s *Store) MarkExported(jobID string, rev int) error {
 var ErrJobGone = errors.New("drums: job directory is gone")
 
 func write(path string, d Doc) error {
-	if _, err := os.Stat(filepath.Dir(filepath.Dir(path))); err != nil {
+	// Mkdir (not MkdirAll) creates only edits/ itself: with the job
+	// directory gone it fails with ENOENT instead of resurrecting the job,
+	// and the rename below fails the same way — no check-then-act window.
+	if err := os.Mkdir(filepath.Dir(path), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
 		if errors.Is(err, os.ErrNotExist) {
 			return ErrJobGone
 		}
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	b, err := json.Marshal(d)
@@ -157,10 +181,16 @@ func write(path string, d Doc) error {
 	}
 	tmp := path + ".part"
 	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrJobGone
+		}
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrJobGone
+		}
 		return err
 	}
 	return nil
