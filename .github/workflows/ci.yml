@@ -32,6 +32,9 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
         with:
+          # A pinned version is downloaded directly; "latest" asks the GitHub
+          # API anonymously and hits its rate limit from this runner.
+          version: "0.11.21"
           enable-cache: true
           cache-dependency-glob: backend/requirements-ci.txt
 
