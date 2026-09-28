@@ -121,5 +121,7 @@ web/dist/*
 !web/dist/.gitkeep
 !web/dist/placeholder.html
 web/node_modules/
+# a worktree may symlink it (no trailing slash: a symlink is not a directory)
+web/node_modules
 web/tsconfig.tsbuildinfo
 /data/

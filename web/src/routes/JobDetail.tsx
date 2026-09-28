@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import * as api from '../api';
 import { ApiError, errorMessage } from '../api/client';
 import { subscribeJobEvents } from '../api/sse';
@@ -12,6 +13,7 @@ import { PanelNotice } from '../components/EmptyState';
 import { Icon } from '../components/Icon';
 import { Divider, Panel } from '../components/Panel';
 import { useToast } from '../components/Toast';
+import { DrumEditor } from '../components/drums/DrumEditor';
 import { MasterStrip } from '../components/mixer/MasterStrip';
 import { MobilePlayer } from '../components/mixer/MobilePlayer';
 import { Strip } from '../components/mixer/Strip';
@@ -21,11 +23,23 @@ import { formatLoopSummary, formatRelative, hoursUntil } from '../lib/format';
 import { isSilenced } from '../lib/mix-state';
 import { canCancel, isActive, LAMPS, lampStates, overallProgress, STAGE_COPY, stageNoun, stemModelCaption } from '../lib/stages';
 import { useAppNavigate } from '../lib/use-app-navigate';
+import { useDrumEditor, type DrumEditorHandle } from '../player/use-drum-editor';
 import { useMixer, type Mixer } from '../player/use-mixer';
 import { jobRoute } from '../router';
 import { NotFoundScreen } from './Errors';
 
 const JOB_KEY = (id: string) => ['jobs', 'detail', id] as const;
+
+export type JobTab = 'mixer' | 'drums';
+
+export interface JobSearch {
+  /** The DRUM EDITOR tab (owner, completed, transcribed jobs only). */
+  tab?: 'drums';
+}
+
+export function jobSearchSchema(raw: Record<string, unknown>): JobSearch {
+  return raw.tab === 'drums' ? { tab: 'drums' } : {};
+}
 
 /** /jobs/$id — one route for processing, completed, failed and cancelled. */
 export function JobDetailRoute() {
@@ -365,17 +379,50 @@ function JobPage({ job, lastEvent, frozenAt }: { job: Job; lastEvent: JobEvent |
 function MixerPanel({ job, onDownload }: { job: Job; onDownload(): void }) {
   const m = useMixer(job);
   const { toast } = useToast();
-  useKeyboard(m);
+  const { user } = useAuth();
+  const search = jobRoute.useSearch();
+  const navigate = useNavigate();
+  // The DRUM EDITOR tab: the owner of a completed, transcribed job whose
+  // drum stem was transcribed (the edits route answers 200); otherwise no
+  // tab strip at all.
+  const editorPossible = Boolean(user && job.owner_id && user.id === job.owner_id && job.transcribe);
+  const ed = useDrumEditor(m, editorPossible && search.tab === 'drums', editorPossible);
+  // The tab appears once the edits answered (no flash for a job whose drum
+  // transcription failed); a ?tab=drums link keeps it while loading.
+  const showTabs = editorPossible && (ed.status === 'ready' || ed.status === 'error' || (ed.status === 'loading' && search.tab === 'drums'));
+  const tab: JobTab = showTabs && search.tab === 'drums' ? 'drums' : 'mixer';
+  useKeyboard(m, tab === 'drums' ? ed : null);
 
   useEffect(() => {
     if (m.engineError) toast({ kind: 'error', title: 'Playback could not start', detail: m.engineError });
   }, [m.engineError, toast]);
 
+  const setTab = (t: JobTab) => {
+    void navigate({ to: '/jobs/$id', params: { id: job.id }, search: t === 'drums' ? { tab: 'drums' } : {}, replace: true });
+  };
+  const hint =
+    tab === 'drums'
+      ? ed.status === 'ready'
+        ? `Drum stem · ${ed.state.hits.length} hits · ${ed.data?.model.adapter ?? 'model'} + edits`
+        : 'Drum stem'
+      : `Song stems · ${job.quality === 'high6' ? 'Demucs HT 6s' : 'Demucs HT'}`;
+
   return (
     <>
       <div className="rk-only-desktop">
         <Panel className="rk-panel-pad" style={{ padding: 'var(--rk-space-9) var(--rk-space-10) var(--rk-space-10)' }}>
-          <DesktopMixer m={m} />
+          {showTabs && (
+            <div className="rk-jobtabs" role="tablist" aria-label="Job views" data-testid="job-tabs">
+              <button className="rk-jobtab" type="button" role="tab" aria-selected={tab === 'mixer'} onClick={() => setTab('mixer')} data-testid="tab-mixer">
+                STEM MIXER
+              </button>
+              <button className="rk-jobtab" type="button" role="tab" aria-selected={tab === 'drums'} onClick={() => setTab('drums')} data-testid="tab-drums">
+                DRUM EDITOR
+              </button>
+              <span className="rk-jobtab-hint">{hint}</span>
+            </div>
+          )}
+          {tab === 'drums' ? <DrumEditor ed={ed} m={m} /> : <DesktopMixer m={m} />}
         </Panel>
       </div>
       <div className="rk-only-mobile">
@@ -484,13 +531,22 @@ function DesktopMixer({ m }: { m: Mixer }) {
   );
 }
 
-/** Page-level shortcuts (screens/02 notes): Space, Home, L, ←/→, 1–6. */
-function useKeyboard(m: Mixer) {
+/**
+ * Page-level shortcuts (screens/02 notes): Space, Home, L, ←/→, 1–6. With
+ * the drum editor active its own context goes first (1/2/3 tools, Q, S,
+ * Ctrl+Z/Y/C/V/D/A, Del, ←/→ nudge) and the digit solos are off; Space,
+ * Home and L stay shared.
+ */
+function useKeyboard(m: Mixer, editor: DrumEditorHandle | null) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (!t) return;
       if (t.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return;
+      if (editor && editor.handleKey(e)) {
+        e.preventDefault();
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       switch (e.key) {
         case ' ':
@@ -515,6 +571,7 @@ function useKeyboard(m: Mixer) {
           m.nudge(e.shiftKey ? 1 : 5);
           return;
         default: {
+          if (editor) return;
           const n = Number(e.key);
           if (Number.isInteger(n) && n >= 1 && n <= m.stems.length) {
             e.preventDefault();
@@ -525,7 +582,7 @@ function useKeyboard(m: Mixer) {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [m]);
+  }, [m, editor]);
 }
 
 // ---- loading skeleton (state-loading.html): same geometry, mixer dimmed ----
