@@ -21,6 +21,29 @@ import (
 // PPQ is the resolution of the files written.
 const PPQ = 960
 
+// Note lengths in beats: drums always get a 16th (a sampler only needs the
+// trigger; the adapters' offsets are a fixed 100 ms), every other stem keeps
+// the transcribed length, floored at a 32nd so the note-off never lands on
+// the note-on tick.
+const (
+	DrumDuration = 0.25
+	MinDuration  = 1.0 / 32
+)
+
+// Duration applies the length rule to one note of stem, given its onset
+// and offset in beats. The worker's finalize and the drum editor's export
+// share it so both write the same file for the same events.
+func Duration(stem string, onset, offset float64) float64 {
+	dur := offset - onset
+	if stem == "drums" {
+		dur = DrumDuration
+	}
+	if dur < MinDuration {
+		dur = MinDuration
+	}
+	return dur
+}
+
 // Note is one event in beats (project-absolute).
 type Note struct {
 	Beat     float64

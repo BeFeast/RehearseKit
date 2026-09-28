@@ -23,7 +23,11 @@ func (h *Handlers) RegisterDownload(mux *http.ServeMux) {
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._ -]+`)
 
 // PackageFilename derives the attachment name from the project name.
-func PackageFilename(projectName string) string {
+func PackageFilename(projectName string) string { return SafeName(projectName) + "-stems.zip" }
+
+// SafeName reduces a project name to an ASCII file-name stem (max 80
+// chars, "rehearsekit" when nothing is left).
+func SafeName(projectName string) string {
 	n := strings.TrimSpace(unsafeName.ReplaceAllString(projectName, "_"))
 	n = strings.Trim(n, "._ ")
 	if n == "" {
@@ -32,7 +36,7 @@ func PackageFilename(projectName string) string {
 	if len(n) > 80 {
 		n = n[:80]
 	}
-	return n + "-stems.zip"
+	return n
 }
 
 func (h *Handlers) download(w http.ResponseWriter, r *http.Request) {

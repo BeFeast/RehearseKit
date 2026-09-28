@@ -495,13 +495,7 @@ func (r *run) transcription(proj *dawproject.Project) error {
 		}
 		for _, n := range notes.Notes {
 			start := beat(n.Onset)
-			dur := beat(n.Offset) - start
-			if stem == "drums" {
-				dur = 0.25 // a 16th: SD3 only needs the trigger
-			}
-			if dur < 1.0/32 {
-				dur = 1.0 / 32
-			}
+			dur := midi.Duration(stem, start, beat(n.Offset))
 			track.Notes = append(track.Notes, dawproject.Note{Beat: start, Duration: dur, Key: n.Pitch, Velocity: n.Velocity})
 			mt.Notes = append(mt.Notes, midi.Note{Beat: start, Duration: dur, Key: n.Pitch, Velocity: n.Velocity})
 		}
