@@ -279,8 +279,16 @@ function JobPage({ job, lastEvent, frozenAt }: { job: Job; lastEvent: JobEvent |
         <MixerPanel key={mixerKey(job)} job={job} onDownload={() => void download()} />
       ) : completed ? (
         <Panel className="rk-panel-pad" style={{ padding: 'var(--rk-space-9) var(--rk-space-10) var(--rk-space-10)' }}>
-          <PanelNotice art="processing" title="Loading the stems…">
-            Processing finished; the mixer opens as soon as the stem list arrives.
+          <PanelNotice
+            art="processing"
+            title="Loading the stems…"
+            actions={
+              <button className="rk-btn" type="button" onClick={() => void qc.invalidateQueries({ queryKey: JOB_KEY(job.id) })}>
+                <Icon name="refresh" size={18} /> Reload
+              </button>
+            }
+          >
+            Processing finished; the mixer opens as soon as the stem list arrives. If it does not, reload.
           </PanelNotice>
         </Panel>
       ) : (
