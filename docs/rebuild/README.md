@@ -390,10 +390,71 @@ curl -b cj -o vocals.pk $B/api/v1/jobs/<id>/stems/vocals/peaks
 # the package (409 not_ready until the job is completed; Range supported)
 curl -b cj -OJ $B/api/v1/jobs/<id>/download
 
+# transcription artefacts (same read access as the job; 404 analysis_not_found / notes_not_found)
+curl -s -b cj $B/api/v1/jobs/<id>/analysis
+curl -s -b cj $B/api/v1/jobs/<id>/notes/drums        # drums|bass|guitar|piano
+
+# drum editor: the edit revision (owner only; 409 not_ready, 404 drum_notes_not_found)
+curl -s -b cj $B/api/v1/jobs/<id>/drums/edits        # {doc, profile, grid, model, stale_model, duration, warnings}
+curl -s -b cj -X PUT -H 'Content-Type: application/json' \
+  -d '{"base_rev":0,"events":[{"id":"u1","art":"snare","t":12.431,"vel":0.24,"src":"manual"}]}' \
+  $B/api/v1/jobs/<id>/drums/edits                    # {edit_rev, updated_at}; 409 edit_conflict {edit_rev} when base_rev is stale
+
 # admin approval of self-registered accounts
 curl -s -b cj '$B/api/v1/admin/users?status=pending'
 curl -s -b cj -X POST $B/api/v1/admin/users/<user-id>/approve
 ```
+
+## Drum editor (`internal/drums`)
+
+The SPA's DRUM EDITOR tab works on the S1 artefacts of a completed
+`transcribe` job and keeps the owner's edits on the server, next to the
+model output, never inside `package.zip`:
+
+```
+jobs/<id>/notes/drums.json   model output (ADTOF, GM keys 36/38/42/48/49), immutable
+jobs/<id>/edits/drums.json   edit revision: a full snapshot of the events, written by PUT
+```
+
+`edits/drums.json` (`version` 1) carries `model_rev` (`adapter`, `model`,
+`count`, `notes_sha256` of the notes file it was derived from), `edit_rev`
+(0 = the untouched seed, +1 per saved PUT), `exported_rev`, `profile`
+(`gm`), `updated_at` and `events[]`: `{id, art, t, vel, src, model?}` —
+`art` is one of the twelve articulations (`kick`, `snare`, `stick`, `hhc`,
+`hho`, `hhp`, `tomh`, `tomm`, `tomf`, `ride`, `bell`, `crash`), `t` absolute
+seconds, `vel` 0..1 (the editor shows `round(vel*127)`), `src` `model` (with
+`model` = index into the notes file) or `manual`. A model event that was
+not touched keeps the onset and velocity of the notes file bit for bit, so
+an export of an edited revision leaves unchanged hits on their original
+timestamps. Mapping profiles (articulation → MIDI key) are JSON data in
+`internal/drums/profiles/`; the seed maps GM keys back to articulations
+through the same profile and drops (with a warning) any key it does not
+know.
+
+Routes (`internal/drums/handlers.go`):
+
+- `GET /api/v1/jobs/{id}/analysis`, `GET /api/v1/jobs/{id}/notes/{stem}` —
+  the files as uploaded, with the job's read access.
+- `GET /api/v1/jobs/{id}/drums/edits` — owner only; `409 not_ready` before
+  completion, `404 drum_notes_not_found` when the job was not transcribed
+  or the drums adapter failed. Returns `{doc, profile, grid, grid_error,
+  model, stale_model, duration, warnings}`; without a saved revision `doc`
+  is the seed (rev 0) and nothing is written. `grid` is
+  `grid.Map.Export()` — the cleaned beats, `offset`, `median`, `constant`,
+  `bpm`, `numerator`, `time_signatures` — so the editor's ruler, snap and
+  `bar.beat.tick` come from the same map the MIDI export uses; `null` (with
+  `grid_error`) when the job has no usable grid, in which case the editor
+  works in seconds. `stale_model` is set when the saved revision was
+  derived from a different notes file.
+- `PUT /api/v1/jobs/{id}/drums/edits` `{base_rev, events}` (≤ 4 MiB, ≤ 20 000
+  events) — optimistic concurrency: the save is accepted only when
+  `base_rev` equals the current `edit_rev`, otherwise `409 edit_conflict`
+  with the current `edit_rev` in the body and the client reloads. Saves are
+  serialised per job in the `rk serve` process; the file is written via
+  `.part` + rename. Undo/redo history lives in the SPA only. `400
+  invalid_edits` names the first bad event.
+
+Retention and `DELETE` remove `edits/` with the job directory.
 
 ## YouTube preview
 
