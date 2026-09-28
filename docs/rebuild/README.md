@@ -420,10 +420,13 @@ jobs/<id>/edits/drums.json   edit revision: a full snapshot of the events, writt
 `count`, `notes_sha256` of the notes file it was derived from), `edit_rev`
 (0 = the untouched seed, +1 per saved PUT), `exported_rev`, `profile`
 (`gm`), `updated_at` and `events[]`: `{id, art, t, vel, src, model?}` —
+`id` matches `^[a-z][a-z0-9_-]{0,31}$` and is unique within the document
+(the seed uses `m<index>`, the editor `u<n>` for manual hits),
 `art` is one of the twelve articulations (`kick`, `snare`, `stick`, `hhc`,
 `hho`, `hhp`, `tomh`, `tomm`, `tomf`, `ride`, `bell`, `crash`), `t` absolute
-seconds, `vel` 0..1 (the editor shows `round(vel*127)`), `src` `model` (with
-`model` = index into the notes file) or `manual`. A model event that was
+seconds, `vel` 0..1 (the editor shows `max(1, round(vel*127))`), `src` `model`
+(with `model` = index into the notes file **as sorted by onset**, the order
+`analysis.ParseNotes` yields) or `manual`. A model event that was
 not touched keeps the onset and velocity of the notes file bit for bit, so
 an export of an edited revision leaves unchanged hits on their original
 timestamps. Mapping profiles (articulation → MIDI key) are JSON data in
@@ -447,7 +450,8 @@ Routes (`internal/drums/handlers.go`):
   works in seconds. `stale_model` is set when the saved revision was
   derived from a different notes file.
 - `PUT /api/v1/jobs/{id}/drums/edits` `{base_rev, events}` (≤ 4 MiB, ≤ 20 000
-  events) — optimistic concurrency: the save is accepted only when
+  events; `events` is required — an empty list deletes every hit, a
+  missing or null list is `400 invalid_edits`) — optimistic concurrency: the save is accepted only when
   `base_rev` equals the current `edit_rev`, otherwise `409 edit_conflict`
   with the current `edit_rev` in the body and the client reloads. Saves are
   serialised per job in the `rk serve` process; the file is written via

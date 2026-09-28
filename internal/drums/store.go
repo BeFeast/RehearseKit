@@ -137,7 +137,17 @@ func (s *Store) MarkExported(jobID string, rev int) error {
 	return write(path, cur)
 }
 
+// ErrJobGone is returned when the job directory no longer exists (DELETE or
+// retention raced the save): the edits must not resurrect it.
+var ErrJobGone = errors.New("drums: job directory is gone")
+
 func write(path string, d Doc) error {
+	if _, err := os.Stat(filepath.Dir(filepath.Dir(path))); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrJobGone
+		}
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

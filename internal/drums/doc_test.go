@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -109,6 +110,21 @@ func TestSeed(t *testing.T) {
 
 func itoa(i int) string { return strconv.Itoa(i) }
 
+func TestSeedDropsZeroVelocity(t *testing.T) {
+	raw := []byte(`{"stem":"drums","notes":[{"onset":1,"offset":1.1,"pitch":36,"velocity":0},{"onset":2,"offset":2.1,"pitch":38,"velocity":0.5}]}`)
+	notes, err := analysis.ParseNotes(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, warnings := Seed(notes, raw, gm(t), time.Now())
+	if len(d.Events) != 1 || d.Events[0].Art != "snare" || len(warnings) != 1 {
+		t.Fatalf("events %+v warnings %v", d.Events, warnings)
+	}
+	if err := Validate(d.Events, 10, 2); err != nil {
+		t.Fatalf("seed must validate: %v", err)
+	}
+}
+
 func TestValidate(t *testing.T) {
 	idx := func(i int) *int { return &i }
 	ok := []Event{{ID: "u2", Art: "snare", T: 2.5, Vel: 0.3, Src: SourceManual}, {ID: "m0", Art: "kick", T: 0.5, Vel: 0.8, Src: SourceModel, Model: idx(0)}}
@@ -153,6 +169,10 @@ func newStore(t *testing.T) (*Store, storage.Layout, string) {
 		t.Fatal(err)
 	}
 	id := "0f5b8c2e-1d3a-4b7c-9e0f-1a2b3c4d5e6f"
+	dir, _ := layout.JobDir(id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return NewStore(layout), layout, id
 }
 
@@ -318,5 +338,72 @@ func TestReadRejectsOtherVersions(t *testing.T) {
 	_ = os.WriteFile(path, []byte(`{"version":2,"events":[]}`), 0o644)
 	if _, err := store.Load(id); err == nil {
 		t.Fatal("version 2 accepted")
+	}
+}
+
+// TestSaveConcurrent: many tabs saving against the same base revision at
+// once — exactly one wins, the rest see the winner's revision.
+func TestSaveConcurrent(t *testing.T) {
+	notes, raw := parseTestNotes(t)
+	store, _, id := newStore(t)
+	now := time.Now()
+	seed := func() (Doc, error) { d, _ := Seed(notes, raw, gm(t), now); return d, nil }
+	base, _ := seed()
+	const n = 24
+	var wg sync.WaitGroup
+	wins := make([]bool, n)
+	conflicts := make([]int, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := store.Save(id, seed, 0, base.Events[:i%len(base.Events)+1], now)
+			var c *ConflictError
+			switch {
+			case err == nil:
+				wins[i] = true
+			case errors.As(err, &c):
+				conflicts[i] = c.EditRev
+			default:
+				t.Errorf("save %d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	won := 0
+	for i := range wins {
+		if wins[i] {
+			won++
+		} else if conflicts[i] != 1 {
+			t.Errorf("save %d: conflict rev %d, want 1", i, conflicts[i])
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d winners", won)
+	}
+	d, err := store.Load(id)
+	if err != nil || d.EditRev != 1 {
+		t.Fatalf("after race: %+v %v", d, err)
+	}
+}
+
+func TestSaveAfterJobRemoved(t *testing.T) {
+	notes, raw := parseTestNotes(t)
+	store, layout, id := newStore(t)
+	now := time.Now()
+	seed := func() (Doc, error) { d, _ := Seed(notes, raw, gm(t), now); return d, nil }
+	base, _ := seed()
+	if _, err := store.Save(id, seed, 0, base.Events, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := layout.RemoveJob(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save(id, seed, 0, base.Events, now); !errors.Is(err, ErrJobGone) {
+		t.Fatalf("save after removal: %v", err)
+	}
+	dir, _ := layout.JobDir(id)
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("job directory resurrected")
 	}
 }

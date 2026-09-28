@@ -72,6 +72,10 @@ func DecodeJSONMax(r *http.Request, v any, limit int64) error {
 		if errors.Is(err, io.EOF) {
 			return E(http.StatusBadRequest, "invalid_json", "request body is empty")
 		}
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return E(http.StatusRequestEntityTooLarge, "body_too_large", fmt.Sprintf("request body exceeds %d bytes", tooLarge.Limit))
+		}
 		return E(http.StatusBadRequest, "invalid_json", "malformed JSON body: "+err.Error())
 	}
 	return nil

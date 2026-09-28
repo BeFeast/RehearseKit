@@ -252,10 +252,23 @@ func TestEditsLifecycle(t *testing.T) {
 		"time":    map[string]any{"base_rev": 1, "events": []map[string]any{{"id": "u2", "art": "kick", "t": 99, "vel": 0.5, "src": "manual"}}},
 		"unknown": map[string]any{"base_rev": 1, "events": []any{}, "extra": 1},
 		"neg":     map[string]any{"base_rev": -1, "events": []any{}},
+		"null":    map[string]any{"base_rev": 1, "events": nil},
+		"missing": map[string]any{"base_rev": 1},
 	} {
 		if st, _ := call(t, ts, "PUT", base, token, body); st != 400 {
 			t.Errorf("%s: %d", name, st)
 		}
+	}
+	// Over the body limit → 413, and the revision is untouched.
+	big := make([]map[string]any, 0, 60000)
+	for i := 0; i < 60000; i++ {
+		big = append(big, map[string]any{"id": fmt.Sprintf("u%027d", i+10), "art": "kick", "t": 1.123456789, "vel": 0.512345678, "src": "manual"})
+	}
+	if b, _ := json.Marshal(map[string]any{"base_rev": 1, "events": big}); len(b) <= drums.MaxBodyBytes {
+		t.Fatalf("test payload is only %d bytes", len(b))
+	}
+	if st, body := call(t, ts, "PUT", base, token, map[string]any{"base_rev": 1, "events": big}); st != 413 || code(body) != "body_too_large" {
+		t.Fatalf("oversized put: %d %s", st, body[:min(len(body), 200)])
 	}
 	// An empty event list is a valid revision (everything deleted).
 	if st, body := call(t, ts, "PUT", base, token, map[string]any{"base_rev": 1, "events": []any{}}); st != 200 {

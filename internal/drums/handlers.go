@@ -127,8 +127,10 @@ type SaveResponse struct {
 }
 
 type putBody struct {
-	BaseRev int     `json:"base_rev"`
-	Events  []Event `json:"events"`
+	BaseRev int `json:"base_rev"`
+	// Events is required: an empty list deletes every hit, a missing or
+	// null list is a malformed request, never a wipe.
+	Events *[]Event `json:"events"`
 }
 
 // source is what the editor needs from the job directory.
@@ -272,12 +274,17 @@ func (h *Handlers) putEdits(w http.ResponseWriter, r *http.Request) {
 		respond.Failf(w, http.StatusBadRequest, "invalid_edits", "base_rev must be ≥ 0")
 		return
 	}
-	if err := Validate(body.Events, s.duration, len(s.notes.Notes)); err != nil {
+	if body.Events == nil {
+		respond.Failf(w, http.StatusBadRequest, "invalid_edits", "events is required (an empty list deletes every hit)")
+		return
+	}
+	events := *body.Events
+	if err := Validate(events, s.duration, len(s.notes.Notes)); err != nil {
 		respond.Failf(w, http.StatusBadRequest, "invalid_edits", err.Error())
 		return
 	}
 	now := h.now()
-	doc, err := h.store.Save(s.job.ID, func() (Doc, error) { d, _ := s.seed(now); return d, nil }, body.BaseRev, body.Events, now)
+	doc, err := h.store.Save(s.job.ID, func() (Doc, error) { d, _ := s.seed(now); return d, nil }, body.BaseRev, events, now)
 	var conflict *ConflictError
 	if errors.As(err, &conflict) {
 		respond.JSON(w, http.StatusConflict, map[string]any{
@@ -285,6 +292,10 @@ func (h *Handlers) putEdits(w http.ResponseWriter, r *http.Request) {
 			"message":  "the edit revision changed since this page loaded; reload to continue",
 			"edit_rev": conflict.EditRev,
 		})
+		return
+	}
+	if errors.Is(err, ErrJobGone) {
+		respond.Fail(w, respond.ErrNotFound)
 		return
 	}
 	if err != nil {

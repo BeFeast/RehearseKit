@@ -65,6 +65,8 @@ type Doc struct {
 	Events      []Event   `json:"events"`
 }
 
+// idPattern is the event id grammar: a letter then up to 31 of [a-z0-9_-].
+// The seed uses m<index>; the editor issues u<n> for manual hits.
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 // Seed derives the revision-0 document from the model output. Notes whose
@@ -81,6 +83,12 @@ func Seed(notes analysis.Notes, raw []byte, profile Profile, now time.Time) (Doc
 		art, ok := profile.Articulation(n.Pitch)
 		if !ok {
 			warnings = append(warnings, fmt.Sprintf("notes[%d]: pitch %d has no articulation in profile %s, dropped", i, n.Pitch, profile.ID))
+			continue
+		}
+		if n.Velocity <= 0 {
+			// Validate refuses vel 0 (it is a note-off, not a hit); the seed
+			// must always be saveable as it is.
+			warnings = append(warnings, fmt.Sprintf("notes[%d]: velocity 0, dropped", i))
 			continue
 		}
 		idx := i
