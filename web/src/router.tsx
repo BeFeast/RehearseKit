@@ -4,7 +4,7 @@ import { SignInDialog } from './auth/SignInDialog';
 import { ErrorScreen, NotFoundScreen } from './routes/Errors';
 import { LandingRoute } from './routes/Landing';
 import { JobsListRoute, jobsSearchSchema } from './routes/JobsList';
-import { JobDetailRoute } from './routes/JobDetail';
+import { JobDetailRoute, jobSearchSchema } from './routes/JobDetail';
 import { PendingApprovalRoute } from './routes/PendingApproval';
 import { ProfileRoute } from './routes/Profile';
 import { AdminUsersRoute, adminSearchSchema } from './routes/AdminUsers';
@@ -34,7 +34,7 @@ export const jobsRoute = createRoute({
   validateSearch: jobsSearchSchema,
 });
 
-export const jobRoute = createRoute({ getParentRoute: () => rootRoute, path: '/jobs/$id', component: JobDetailRoute });
+export const jobRoute = createRoute({ getParentRoute: () => rootRoute, path: '/jobs/$id', component: JobDetailRoute, validateSearch: jobSearchSchema });
 
 export const pendingRoute = createRoute({ getParentRoute: () => rootRoute, path: '/pending-approval', component: PendingApprovalRoute });
 

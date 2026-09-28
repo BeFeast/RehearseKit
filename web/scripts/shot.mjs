@@ -42,6 +42,8 @@ const routes = [
   ...(jobId ? [{ name: 'job-detail-completed', path: `/jobs/${jobId}`, auth: true, wait: 4000 }] : []),
   ...(jobId ? [{ name: 'job-detail-solo', path: `/jobs/${jobId}`, auth: true, wait: 4000, after: `window.__rk?.toggleSolo('drums'); window.__rk?.toggleMute('other'); window.__rk?.dispatch({type:'select', stem:'drums'})` }] : []),
   ...(jobId ? [{ name: 'job-detail-loading', path: `/jobs/${jobId}`, auth: true, wait: 120 }] : []),
+  // DRUM EDITOR tab (S2): owner of a transcribed job; a hit is selected so the inspector is filled.
+  ...(jobId ? [{ name: 'job-detail-drums', path: `/jobs/${jobId}?tab=drums`, auth: true, wait: 5000, after: `window.__rkDrums?.selectFirstInView?.()` }] : []),
   ...(anonJobId ? [{ name: 'job-detail-anonymous', path: `/jobs/${anonJobId}`, auth: false, wait: 4000 }] : []),
   ...(processingId ? [{ name: 'job-detail-processing', path: `/jobs/${processingId}`, auth: true }] : []),
   ...(failedId ? [{ name: 'job-detail-failed', path: `/jobs/${failedId}`, auth: true }] : []),

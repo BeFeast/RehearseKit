@@ -5,6 +5,7 @@
 @import './tokens.css';
 @import 'tailwindcss';
 @import './screen.css';
+@import './drums.css';
 
 @theme {
   --color-bg: var(--rk-color-bg);
