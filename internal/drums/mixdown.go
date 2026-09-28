@@ -50,20 +50,27 @@ func (s *Store) RenderNoDrums(ctx context.Context, j *jobs.Job) (string, error) 
 	if len(inputs) == 0 {
 		return "", errors.New("drums: no stems to mix")
 	}
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+	// Mkdir, not MkdirAll: a job removed meanwhile must not come back.
+	if err := os.Mkdir(filepath.Dir(out), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", ErrJobGone
+		}
 		return "", err
 	}
-	tmp := out + ".part"
-	if err := sumWAVs(ctx, tmp, inputs); err != nil {
-		_ = os.Remove(tmp)
+	// The render is a cache: once started it runs to the end even when the
+	// request that triggered it is aborted, so the next export finds it.
+	if err := sumWAVs(context.WithoutCancel(ctx), tmp(out), inputs); err != nil {
+		_ = os.Remove(tmp(out))
 		return "", err
 	}
-	if err := os.Rename(tmp, out); err != nil {
-		_ = os.Remove(tmp)
+	if err := os.Rename(tmp(out), out); err != nil {
+		_ = os.Remove(tmp(out))
 		return "", err
 	}
 	return out, nil
 }
+
+func tmp(path string) string { return path + ".part" }
 
 // sumWAVs writes the sample-wise sum of the inputs as a 32-bit float WAV.
 // All inputs must share the sample rate and channel count; the output is as

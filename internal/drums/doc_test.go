@@ -79,7 +79,7 @@ func TestSeed(t *testing.T) {
 	if len(warnings) != 1 || warnings[0] != "notes[11]: pitch 50 has no articulation in profile gm, dropped" {
 		t.Fatalf("warnings %v", warnings)
 	}
-	if d.Version != 1 || d.Stem != "drums" || d.EditRev != 0 || d.ExportedRev != 0 || d.Profile != "gm" || !d.UpdatedAt.Equal(now) {
+	if d.Version != 1 || d.Stem != "drums" || d.EditRev != 0 || d.ExportedRev != nil || d.Profile != "gm" || !d.UpdatedAt.Equal(now) {
 		t.Fatalf("doc %+v", d)
 	}
 	if d.ModelRev.Adapter != "adtof" || d.ModelRev.Model != "adtof_frame_rnn" || d.ModelRev.Count != 12 || len(d.ModelRev.NotesSHA256) != 64 {
@@ -227,7 +227,7 @@ func TestScenarioD3b(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.EditRev != 2 || got.ExportedRev != 0 || !got.UpdatedAt.Equal(now.Add(2*time.Minute)) || got.ModelRev != d1.ModelRev {
+	if got.EditRev != 2 || got.ExportedRev != nil || !got.UpdatedAt.Equal(now.Add(2*time.Minute)) || got.ModelRev != d1.ModelRev {
 		t.Fatalf("reloaded %+v", got)
 	}
 	if len(got.Events) != len(evs) {
@@ -301,17 +301,17 @@ func TestSaveConflictAndExported(t *testing.T) {
 		t.Fatalf("after conflict: %+v %v", d, err)
 	}
 	// Export marks only the current revision.
-	if err := store.MarkExported(id, 5); err != nil {
+	if err := store.MarkExported(id, seed, 5); err != nil {
 		t.Fatal(err)
 	}
-	if d, _ = store.Load(id); d.ExportedRev != 0 {
-		t.Fatalf("stale export marked: %d", d.ExportedRev)
+	if d, _ = store.Load(id); d.ExportedRev != nil {
+		t.Fatalf("stale export marked: %d", *d.ExportedRev)
 	}
-	if err := store.MarkExported(id, 1); err != nil {
+	if err := store.MarkExported(id, seed, 1); err != nil {
 		t.Fatal(err)
 	}
-	if d, _ = store.Load(id); d.ExportedRev != 1 {
-		t.Fatalf("exported_rev %d", d.ExportedRev)
+	if d, _ = store.Load(id); d.ExportedRev == nil || *d.ExportedRev != 1 {
+		t.Fatalf("exported_rev %v", d.ExportedRev)
 	}
 	// No temp file is left behind and the file is JSON with a trailing newline.
 	path, _ := layout.EditsPath(id, "drums")
@@ -408,5 +408,27 @@ func TestSaveAfterJobRemoved(t *testing.T) {
 	dir, _ := layout.JobDir(id)
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("job directory resurrected")
+	}
+}
+
+// TestMarkExportedSeed: exporting the untouched seed writes the document
+// (rev 0, exported_rev 0) so "never exported" (null) and "rev 0 exported"
+// are distinguishable.
+func TestMarkExportedSeed(t *testing.T) {
+	notes, raw := parseTestNotes(t)
+	store, _, id := newStore(t)
+	now := time.Now()
+	seed := func() (Doc, error) { d, _ := Seed(notes, raw, gm(t), now); return d, nil }
+	if err := store.MarkExported(id, seed, 0); err != nil {
+		t.Fatal(err)
+	}
+	d, err := store.Load(id)
+	if err != nil || d.EditRev != 0 || d.ExportedRev == nil || *d.ExportedRev != 0 || len(d.Events) != 11 {
+		t.Fatalf("seed export: %+v %v", d, err)
+	}
+	// A later save continues from rev 0 → 1 and keeps the mark.
+	d1, err := store.Save(id, seed, 0, d.Events[:5], now)
+	if err != nil || d1.EditRev != 1 || d1.ExportedRev == nil || *d1.ExportedRev != 0 {
+		t.Fatalf("save after seed export: %+v %v", d1, err)
 	}
 }

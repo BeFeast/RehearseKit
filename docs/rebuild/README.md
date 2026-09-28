@@ -422,6 +422,8 @@ jobs/<id>/mixes/nodrums.wav  cached render for the export: every stem but drums 
 `count`, `notes_sha256` of the notes file it was derived from), `edit_rev`
 (0 = the untouched seed, +1 per saved PUT), `exported_rev`, `profile`
 (`gm`), `updated_at` and `events[]`: `{id, art, t, vel, src, model?}` —
+(`exported_rev` is `null` until the first export; exporting the seed writes
+the file with rev 0) —
 `id` matches `^[a-z][a-z0-9_-]{0,31}$` and is unique within the document
 (the seed uses `m<index>`, the editor `u<n>` for manual hits),
 `art` is one of the twelve articulations (`kick`, `snare`, `stick`, `hhc`,
@@ -461,8 +463,12 @@ Routes (`internal/drums/handlers.go`):
   invalid_edits` names the first bad event.
 
 - `POST /api/v1/jobs/{id}/drums/export` with `{edit_rev}` (JSON) or
-  `edit_rev=N` (form, so a browser form submit downloads natively) — owner
-  only; `409 edit_conflict` unless `edit_rev` is the current revision.
+  `edit_rev=N` (form, so a browser form submit downloads natively with the
+  session cookie; transcribe jobs are always owned, so no claim-token path
+  is needed) — owner only; `409 edit_conflict` unless `edit_rev` is the
+  current revision. A failure after the stream started aborts the
+  connection (no chunked terminator) so the browser reports a failed
+  download rather than saving a truncated archive.
   Streams `<project>-drums-r<rev>.zip` holding `drums.mid` (SMF 1, 960 PPQ:
   track 0 the tempo map and time signatures of the S1 grid, track 1 the
   hits on channel 9 through the GM profile, a 16th each, the same

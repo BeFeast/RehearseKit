@@ -337,6 +337,9 @@ func exportRev(r *http.Request) (int, error) {
 		if err := respond.DecodeJSON(r, &body); err != nil {
 			return 0, err
 		}
+		if body.EditRev < 0 {
+			return 0, respond.E(http.StatusBadRequest, "invalid_json", "edit_rev must be a non-negative integer")
+		}
 		return body.EditRev, nil
 	default:
 		r.Body = http.MaxBytesReader(nil, r.Body, 1<<16)
@@ -399,9 +402,15 @@ func (h *Handlers) export(w http.ResponseWriter, r *http.Request) {
 	if s.job.DetectedBPM != nil {
 		bpm = *s.job.DetectedBPM
 	}
+	// The mapping the document was edited against; the default when a
+	// saved document names a profile this build does not know.
+	profile := s.profile
+	if p, ok := ProfileByID(doc.Profile); ok {
+		profile = p
+	}
 	e := &Export{
 		ProjectName: s.job.ProjectName, Duration: s.duration, BPM: bpm, Grid: s.gridMap, Sections: s.sections,
-		Profile: s.profile, Events: doc.Events, DrumsPath: drumsPath, MixPath: mixPath, Version: h.Version,
+		Profile: profile, Events: doc.Events, DrumsPath: drumsPath, MixPath: mixPath, Version: h.Version,
 	}
 	// Render the small parts first so a bad event still yields a JSON error.
 	if _, err := e.MIDI(); err != nil {
@@ -414,11 +423,13 @@ func (h *Handlers) export(w http.ResponseWriter, r *http.Request) {
 	hdr.Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	hdr.Set("Cache-Control", "private, no-store")
 	if err := e.WriteZip(w); err != nil {
-		// Headers are out; all we can do is cut the stream and log.
+		// Headers are out. Aborting the handler makes the server cut the
+		// connection without the chunked terminator, so the client sees a
+		// broken transfer instead of saving a truncated zip as a download.
 		slog.Warn("drums export aborted", "job", s.job.ID, "rev", doc.EditRev, "err", err)
-		return
+		panic(http.ErrAbortHandler)
 	}
-	if err := h.store.MarkExported(s.job.ID, doc.EditRev); err != nil {
+	if err := h.store.MarkExported(s.job.ID, func() (Doc, error) { d, _ := s.seed(h.now()); return d, nil }, doc.EditRev); err != nil {
 		slog.Warn("drums export: mark exported", "job", s.job.ID, "err", err)
 	}
 }

@@ -37,15 +37,20 @@ func ZipName(safeProjectName string, rev int) string {
 	return fmt.Sprintf("%s-drums-r%d.zip", safeProjectName, rev)
 }
 
+// tempo is the single tempo used without a grid: the detected BPM, or the
+// DAWproject default when none was detected (the worker does the same).
+func (e *Export) tempo() float64 {
+	if e.BPM > 0 {
+		return e.BPM
+	}
+	return dawproject.DefaultBPM
+}
+
 func (e *Export) beat(sec float64) float64 {
 	if e.Grid != nil {
 		return e.Grid.Beat(sec)
 	}
-	bpm := e.BPM
-	if bpm <= 0 {
-		bpm = dawproject.DefaultBPM
-	}
-	return sec * bpm / 60
+	return sec * e.tempo() / 60
 }
 
 // tracks converts the events into the MIDI and DAWproject note lists with
@@ -74,7 +79,7 @@ func (e *Export) MIDI() ([]byte, error) {
 		return nil, err
 	}
 	var buf bytes.Buffer
-	if err := midi.Write(&buf, e.Grid, e.BPM, mt); err != nil {
+	if err := midi.Write(&buf, e.Grid, e.tempo(), mt); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
@@ -97,7 +102,7 @@ func (e *Export) Project() (dawproject.Project, error) {
 		NoteTracks: []dawproject.NoteTrack{nt},
 	}
 	if e.BPM > 0 {
-		bpm := e.BPM
+		bpm := e.tempo()
 		p.BPM = &bpm
 	}
 	for _, s := range e.Sections {

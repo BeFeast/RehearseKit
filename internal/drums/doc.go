@@ -58,8 +58,9 @@ type Doc struct {
 	ModelRev ModelRev `json:"model_rev"`
 	// EditRev is 0 for the untouched seed and grows by one per saved PUT.
 	EditRev int `json:"edit_rev"`
-	// ExportedRev is the revision the last export was built from (0: none).
-	ExportedRev int       `json:"exported_rev"`
+	// ExportedRev is the revision the last export was built from; nil when
+	// nothing was exported yet (rev 0, the seed, can be exported too).
+	ExportedRev *int      `json:"exported_rev"`
 	Profile     string    `json:"profile"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	Events      []Event   `json:"events"`
