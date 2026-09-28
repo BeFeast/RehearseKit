@@ -420,7 +420,10 @@ func (r *run) transcription(proj *dawproject.Project) error {
 	r.summary = sum
 	var m *grid.Map
 	if res.Grid != nil {
-		m, err = grid.Build(res.Grid.Beats, res.Grid.Downbeats, r.info.Duration())
+		// The librosa tempo (null below its confidence gate) checks the
+		// metrical level; the drum editor passes the same value from
+		// jobs.detected_bpm, so both build the same grid.
+		m, err = grid.BuildWith(res.Grid.Beats, res.Grid.Downbeats, r.info.Duration(), grid.Options{RefBPM: r.tempo.BPM})
 		if err != nil {
 			r.log.Warn("grid unusable, single tempo kept", "err", err)
 			sum.GridError = err.Error()
@@ -437,10 +440,10 @@ func (r *run) transcription(proj *dawproject.Project) error {
 		if m.Constant {
 			sum.Grid = fmt.Sprintf("%.2f BPM constant, %d beats, %d/4", m.BPM(), len(m.Beats()), m.Numerator())
 		} else {
-			sum.Grid = fmt.Sprintf("%.1f–%.1f BPM per beat, %d beats, %d bars", lo, hi, len(m.Beats()), len(m.Bars))
+			sum.Grid = fmt.Sprintf("%.1f–%.1f BPM in %d tempo sections, %d beats, %d bars", lo, hi, m.Segments(), len(m.Beats()), len(m.Bars))
 		}
-		if m.Dropped+m.Filled > 0 {
-			sum.Grid += fmt.Sprintf(" (cleaned: %d dropped, %d filled)", m.Dropped, m.Filled)
+		if m.Dropped+m.Filled+m.Bridged > 0 {
+			sum.Grid += fmt.Sprintf(" (cleaned: %d dropped, %d filled, %d evened over tracker noise)", m.Dropped, m.Filled, m.Bridged)
 		}
 		r.log.Info("tempo map", "summary", sum.Grid)
 	}

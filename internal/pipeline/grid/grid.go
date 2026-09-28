@@ -3,13 +3,25 @@
 // tempo automation and the .mid tempo track are all derived from a Map, so
 // audio and MIDI can not drift apart.
 //
-// Beat positions are uniform in beat units (beat k sits at Offset+k); the
-// tempo between two beats is 60/(t[k+1]-t[k]). Before the first beat the
-// first interval is extrapolated, after the last beat the last one. The
-// first downbeat is placed on a bar boundary (P = numerator·ceil(n/numerator)
-// where n is the number of beats between second 0 and that downbeat), so
+// Detected beats are cleaned (doubled, double-time and missed beats) and
+// then fitted with the fewest stretches of constant tempo that keep every
+// beat within fitTol of the grid: a steady song gets one tempo, a song
+// with tempo changes a few steps, never a per-beat zig-zag. The map is
+// built on the fitted beat times. Beat positions are uniform in beat units
+// (beat k sits at Offset+k); the tempo between two beats is
+// 60/(t[k+1]-t[k]). Before the first beat the first interval is
+// extrapolated, after the last beat the last one.
+//
+// Bar lines come from a bar tracker over the detected downbeats (bars of
+// 2..8 beats, a time-signature change costs more than a missed downbeat).
+// The first bar line is placed on a bar boundary (P = numerator·ceil(n/
+// numerator) where n is the number of beats between second 0 and it), so
 // second 0 lands at a non-negative fractional beat and every clip starts
 // at Beat(0).
+//
+// A grid the tracker is not confident about is refused (ErrUncertain)
+// rather than written: too little of the song on a stable tempo, or a
+// metrical level that disagrees with an independent tempo estimate.
 package grid
 
 import (
@@ -28,12 +40,15 @@ const (
 	MinBeats = 8
 	// Denominator is fixed: one beat is a quarter note.
 	Denominator = 4
-	// MaxNumerator caps beats per bar.
-	MaxNumerator = 32
 
-	// constantSpread is the (p95-p5)/median beat-interval spread below
-	// which a single tempo is written instead of per-beat automation.
-	constantSpread = 0.02
+	// minStable: below this share of beats on a stable tempo the grid is
+	// refused; minStableOffLevel applies when the tempo also disagrees with
+	// the reference tempo by a non-octave ratio (3:2 and the like).
+	minStable         = 0.6
+	minStableOffLevel = 0.85
+	// levelTol is the relative tolerance for "same metrical level" (ratio
+	// 1, 2 or 1/2 to the reference tempo).
+	levelTol = 0.08
 	// dropRatio: an interval shorter than dropRatio*median is a doubled beat.
 	dropRatio = 0.5
 	// halfRatio: two consecutive intervals both shorter than halfRatio*median
@@ -47,14 +62,26 @@ const (
 // ErrTooFewBeats is returned when the grid is unusable.
 var ErrTooFewBeats = errors.New("grid: too few beats")
 
+// ErrUncertain is returned (wrapped, with the reason) when the beat
+// tracker is not confident enough for a tempo map.
+var ErrUncertain = errors.New("grid: beat tracking not confident")
+
+// Options are the inputs of Build besides the tracker output.
+type Options struct {
+	// RefBPM is an independent tempo estimate of the same audio (librosa,
+	// jobs.detected_bpm); nil when there is none. It is only used to check
+	// the metrical level.
+	RefBPM *float64
+	// Force builds the map even when the tracker is not confident
+	// (diagnostics only; exports never set it).
+	Force bool
+}
+
 // Bar is one bar of the map.
 type Bar struct {
 	// Beat is the position of the downbeat, in beats.
 	Beat float64
-	// Count is the number of detected beats in the bar.
-	Count int
-	// Numerator is the effective time-signature numerator (Count unless
-	// the bar was merged as a missed-downbeat artefact).
+	// Numerator is the number of beats in the bar.
 	Numerator int
 }
 
@@ -66,7 +93,7 @@ type TimeSignature struct {
 }
 
 // TempoPoint is one automation point (Bitwig stepped form: two points
-// share a time at every beat).
+// share a time at every tempo change).
 type TempoPoint struct {
 	Beat float64
 	BPM  float64
@@ -80,16 +107,22 @@ type Warp struct {
 
 // Map is a built grid.
 type Map struct {
-	beats  []float64 // cleaned, ascending
+	beats  []float64 // fitted, ascending
 	offset float64   // beat position of beats[0]
 	median float64   // median interval, seconds
+	segs   []segment // constant-tempo stretches of beats
 
 	// Constant is true when the tempo is written as a single value.
 	Constant bool
+	// Stable is the share of beats on a tempo held for at least stableLen
+	// beats.
+	Stable float64
 	// Bars from the first downbeat on; nil when no downbeat was given.
 	Bars []Bar
-	// Dropped and Filled count cleaning edits.
-	Dropped, Filled int
+	// Dropped and Filled count cleaning edits; Bridged counts beats laid
+	// evenly over tracker noise between two stretches of the same tempo
+	// (the detections there are counted in Dropped).
+	Dropped, Filled, Bridged int
 	// Clamped counts tempo values that hit MinBPM/MaxBPM.
 	Clamped int
 
@@ -97,9 +130,15 @@ type Map struct {
 	sigs       []TimeSignature
 }
 
-// Build cleans beats (seconds, ascending), matches downbeats (seconds) to
-// them and derives bars and the lead-in. duration is the audio length.
+// Build is BuildWith without options.
 func Build(beats, downbeats []float64, duration float64) (*Map, error) {
+	return BuildWith(beats, downbeats, duration, Options{})
+}
+
+// BuildWith cleans beats (seconds, ascending), fits the tempo, matches
+// downbeats (seconds) to the beats and derives bars and the lead-in.
+// duration is the audio length.
+func BuildWith(beats, downbeats []float64, duration float64, opt Options) (*Map, error) {
 	if len(beats) < MinBeats {
 		return nil, fmt.Errorf("%w: %d", ErrTooFewBeats, len(beats))
 	}
@@ -112,21 +151,44 @@ func Build(beats, downbeats []float64, duration float64) (*Map, error) {
 		return nil, fmt.Errorf("grid: beats[0]=%v negative", beats[0])
 	}
 	m := &Map{}
-	m.beats, m.Dropped, m.Filled = clean(beats)
-	if len(m.beats) < MinBeats {
-		return nil, fmt.Errorf("%w after cleaning: %d", ErrTooFewBeats, len(m.beats))
+	cleaned, dropped, filled := clean(beats)
+	m.Dropped, m.Filled = dropped, filled
+	if len(cleaned) < MinBeats {
+		return nil, fmt.Errorf("%w after cleaning: %d", ErrTooFewBeats, len(cleaned))
 	}
+	if med := median(intervals(cleaned)); med < 60/MaxBPM || med > 60/MinBPM {
+		return nil, fmt.Errorf("grid: median interval %.3fs outside the %.0f–%.0f BPM range", med, MinBPM, MaxBPM)
+	}
+	m.segs = fitSegments(cleaned)
+	if out, n := trimEdges(cleaned, m.segs); n > 0 {
+		cleaned, m.Dropped = out, m.Dropped+n
+		m.segs = fitSegments(cleaned)
+	}
+	for range len(cleaned) { // each pass removes one stretch of noise
+		out, removed, inserted, ok := bridge(cleaned, m.segs)
+		if !ok {
+			break
+		}
+		cleaned, m.Bridged = out, m.Bridged+inserted
+		m.Dropped += removed
+		m.segs = fitSegments(cleaned)
+	}
+	m.Stable = stableShare(m.segs, len(cleaned))
+	m.beats = fitGrid(cleaned, m.segs)
 	m.median = median(intervals(m.beats))
-	if m.median < 60/MaxBPM || m.median > 60/MinBPM {
-		return nil, fmt.Errorf("grid: median interval %.3fs outside the %.0f–%.0f BPM range", m.median, MinBPM, MaxBPM)
+	if err := m.confident(opt.RefBPM); err != nil && !opt.Force {
+		return nil, err
 	}
-	m.Constant = spread(intervals(m.beats), m.median) < constantSpread
+	if len(m.segs) == 1 {
+		m.Constant = true
+		m.median = m.segs[0].period
+	}
 
 	// Downbeats → indices into the cleaned beats (nearest, within half an interval).
 	var dbIdx []int
 	for _, d := range downbeats {
-		i := nearest(m.beats, d)
-		if math.Abs(m.beats[i]-d) <= m.median/2 && (len(dbIdx) == 0 || i > dbIdx[len(dbIdx)-1]) {
+		i := nearest(cleaned, d)
+		if math.Abs(cleaned[i]-d) <= m.median/2 && (len(dbIdx) == 0 || i > dbIdx[len(dbIdx)-1]) {
 			dbIdx = append(dbIdx, i)
 		}
 	}
@@ -135,7 +197,33 @@ func Build(beats, downbeats []float64, duration float64) (*Map, error) {
 	return m, nil
 }
 
-// buildBars derives numerators, the lead-in offset and the signature changes.
+// confident refuses a grid with too little stable tempo, or with a tempo
+// on a different metrical level than the reference (136 against 92 BPM is
+// 3:2: one of the two counts the wrong pulse, and a wrong grid is worse
+// than none).
+func (m *Map) confident(ref *float64) error {
+	bpm := 60 / m.median
+	if m.Stable < minStable {
+		return fmt.Errorf("%w: only %.0f%% of the beats on a stable tempo", ErrUncertain, m.Stable*100)
+	}
+	if ref == nil || *ref <= 0 {
+		return nil
+	}
+	ratio := bpm / *ref
+	for _, r := range []float64{1, 2, 0.5} {
+		if math.Abs(ratio/r-1) <= levelTol {
+			return nil
+		}
+	}
+	if m.Stable < minStableOffLevel {
+		return fmt.Errorf("%w: metrical level unclear, beat tracker %.1f BPM vs %.1f BPM (ratio %.2f), %.0f%% of the beats on a stable tempo",
+			ErrUncertain, bpm, *ref, ratio, m.Stable*100)
+	}
+	return nil
+}
+
+// buildBars derives the bar lines, the lead-in offset and the signature
+// changes.
 func (m *Map) buildBars(db []int) {
 	if len(db) < 2 {
 		// No usable downbeats: 4/4 from the first beat, which is beat 0
@@ -148,52 +236,19 @@ func (m *Map) buildBars(db []int) {
 		m.offset = m.leadIn(first, 4)
 		return
 	}
-	counts := make([]int, len(db)-1)
-	for i := range counts {
-		counts[i] = clampInt(db[i+1]-db[i], 1, MaxNumerator)
-	}
-	nums := effectiveNumerators(counts)
+	first, nums := trackBars(len(m.beats), db)
 	m.numerator0 = nums[0]
-	m.offset = m.leadIn(db[0], nums[0])
-	prev := 0
-	for i, c := range counts {
-		bar := Bar{Beat: m.offset + float64(db[i]), Count: c, Numerator: nums[i]}
+	m.offset = m.leadIn(first, nums[0])
+	prev, pos := 0, first
+	for _, n := range nums {
+		bar := Bar{Beat: m.offset + float64(pos), Numerator: n}
 		m.Bars = append(m.Bars, bar)
-		if nums[i] != prev {
-			m.sigs = append(m.sigs, TimeSignature{Beat: bar.Beat, Numerator: nums[i], Denominator: Denominator})
-			prev = nums[i]
+		if n != prev {
+			m.sigs = append(m.sigs, TimeSignature{Beat: bar.Beat, Numerator: n, Denominator: Denominator})
+			prev = n
 		}
+		pos += n
 	}
-}
-
-// effectiveNumerators applies the missed-downbeat rule: an isolated bar
-// whose count is a multiple of its neighbours' numerator is m bars of that
-// numerator, not a signature change. Every other change is kept, so bar
-// lines always follow the detected downbeats.
-func effectiveNumerators(counts []int) []int {
-	out := make([]int, len(counts))
-	copy(out, counts)
-	if len(counts) < 2 {
-		return out
-	}
-	for i := range counts {
-		var n int
-		switch {
-		case i == 0:
-			n = counts[1] // first bar: the following bar is the reference
-		case i == len(counts)-1:
-			n = out[i-1] // last bar: the preceding one
-		default:
-			n = out[i-1]
-			if counts[i+1] != n {
-				continue
-			}
-		}
-		if counts[i] != n && counts[i]%n == 0 {
-			out[i] = n
-		}
-	}
-	return out
 }
 
 // leadIn returns the beat position of beats[0] such that the downbeat at
@@ -201,7 +256,9 @@ func effectiveNumerators(counts []int) []int {
 func (m *Map) leadIn(first, numerator int) float64 {
 	d0 := m.interval(0)
 	pre := float64(first) + m.beats[0]/d0 // beats from second 0 to the first downbeat
-	p := float64(numerator) * math.Ceil(pre/float64(numerator))
+	// The fitted first beat is a least-squares value: a beat at second 0
+	// comes out as 1e-16, which must not push the first bar a bar out.
+	p := float64(numerator) * math.Ceil(pre/float64(numerator)-1e-9)
 	return p - float64(first)
 }
 
@@ -270,47 +327,52 @@ func (m *Map) TimeSignatures() []TimeSignature {
 	return m.sigs
 }
 
-// TempoPoints returns the stepped tempo lane: (0, T0), then at every beat
-// k ≥ 1 the pair (k, T_{k-1}), (k, T_k). Nil when the tempo is constant.
+// Segments is the number of constant-tempo stretches of the lane.
+func (m *Map) Segments() int { return len(m.segs) }
+
+// TempoPoints returns the stepped tempo lane: (0, T0), then at every tempo
+// change at beat k the pair (k, T_before), (k, T_after). Nil when the
+// tempo is constant.
 func (m *Map) TempoPoints() []TempoPoint {
 	if m.Constant {
 		return nil
 	}
-	n := len(m.beats)
-	tempo := func(k int) float64 {
-		v := 60 / m.interval(k)
+	tempo := func(s segment) float64 {
+		v := 60 / s.period
 		c := clampBPM(v)
 		if c != v {
 			m.Clamped++
 		}
 		return c
 	}
-	pts := make([]TempoPoint, 0, 2*n)
-	pts = append(pts, TempoPoint{Beat: 0, BPM: tempo(0)})
-	for k := 1; k < n-1; k++ {
-		pos := m.offset + float64(k)
-		pts = append(pts, TempoPoint{Beat: pos, BPM: tempo(k - 1)}, TempoPoint{Beat: pos, BPM: tempo(k)})
+	pts := make([]TempoPoint, 0, 2*len(m.segs))
+	pts = append(pts, TempoPoint{Beat: 0, BPM: tempo(m.segs[0])})
+	for i := 1; i < len(m.segs); i++ {
+		pos := m.offset + float64(m.segs[i].start)
+		pts = append(pts, TempoPoint{Beat: pos, BPM: tempo(m.segs[i-1])}, TempoPoint{Beat: pos, BPM: tempo(m.segs[i])})
 	}
 	return pts
 }
 
 // Warps returns the warp markers for an audio file of duration seconds
-// that starts at second 0: one per beat inside the file plus both ends.
-// Beat positions are absolute; subtract Beat(0) for clip-local times.
+// that starts at second 0: one per tempo change inside the file plus both
+// ends (the map is linear between tempo changes). Beat positions are
+// absolute; subtract Beat(0) for clip-local times.
 func (m *Map) Warps(duration float64) []Warp {
 	out := []Warp{{Beat: m.Beat(0), Seconds: 0}}
 	if !m.Constant {
-		for k, t := range m.beats {
+		for _, s := range m.segs[1:] {
+			t := m.beats[s.start]
 			if t <= 0 || t >= duration {
 				continue
 			}
-			out = append(out, Warp{Beat: m.offset + float64(k), Seconds: t})
+			out = append(out, Warp{Beat: m.offset + float64(s.start), Seconds: t})
 		}
 	}
 	return append(out, Warp{Beat: m.Beat(duration), Seconds: duration})
 }
 
-// Beats returns the cleaned beat times.
+// Beats returns the fitted beat times.
 func (m *Map) Beats() []float64 { return append([]float64(nil), m.beats...) }
 
 // Export is the JSON form of a Map for clients that draw a ruler or snap
@@ -343,8 +405,8 @@ func (m *Map) Range() (lo, hi float64) {
 		return v, v
 	}
 	lo, hi = math.Inf(1), math.Inf(-1)
-	for k := 0; k < len(m.beats)-1; k++ {
-		v := clampBPM(60 / m.interval(k))
+	for _, s := range m.segs {
+		v := clampBPM(60 / s.period)
 		lo, hi = math.Min(lo, v), math.Max(hi, v)
 	}
 	return lo, hi
@@ -402,14 +464,6 @@ func median(v []float64) float64 {
 	return (s[n/2-1] + s[n/2]) / 2
 }
 
-// spread is (p95 - p5) / median of the intervals.
-func spread(v []float64, med float64) float64 {
-	s := append([]float64(nil), v...)
-	sort.Float64s(s)
-	p := func(q float64) float64 { return s[int(math.Min(float64(len(s)-1), math.Floor(q*float64(len(s)))))] }
-	return (p(0.95) - p(0.05)) / med
-}
-
 func nearest(b []float64, t float64) int {
 	i := sort.SearchFloat64s(b, t)
 	if i == len(b) {
@@ -422,13 +476,3 @@ func nearest(b []float64, t float64) int {
 }
 
 func clampBPM(v float64) float64 { return math.Max(MinBPM, math.Min(MaxBPM, v)) }
-
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}

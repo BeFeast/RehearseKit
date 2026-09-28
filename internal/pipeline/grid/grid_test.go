@@ -1,7 +1,9 @@
 package grid
 
 import (
+	"errors"
 	"math"
+	"sort"
 	"testing"
 )
 
@@ -94,28 +96,23 @@ func TestVariableTempoSteps(t *testing.T) {
 			t.Fatalf("beat %d at %v maps to %v", k, sec, m.Beat(sec))
 		}
 	}
+	// One step at beat 8: (0, 120), (8, 120), (8, 150).
 	pts := m.TempoPoints()
-	if len(pts) != 1+2*(len(beats)-2) || !near(pts[0].BPM, 120) {
+	if len(pts) != 3 || !near(pts[0].BPM, 120) || !near(pts[1].Beat, 8) || !near(pts[1].BPM, 120) ||
+		!near(pts[2].Beat, 8) || !near(pts[2].BPM, 150) {
 		t.Fatalf("points %+v", pts)
 	}
-	// At beat 8 the pair is (150? no: T_7 = 60/(t8-t7)=120, then T_8=150).
-	var found bool
-	for i := 1; i+1 < len(pts); i += 2 {
-		if near(pts[i].Beat, 8) {
-			found = near(pts[i].BPM, 120) && near(pts[i+1].BPM, 150) && near(pts[i+1].Beat, 8)
-		}
-	}
-	if !found {
-		t.Fatalf("no 120→150 step at beat 8: %+v", pts)
+	if m.Segments() != 2 {
+		t.Fatalf("segments %d", m.Segments())
 	}
 	lo, hi := m.Range()
 	if !near(lo, 120) || !near(hi, 150) {
 		t.Fatalf("range %v %v", lo, hi)
 	}
-	// Start, 15 interior beats (beat 0 is the start itself), end.
+	// Start, the tempo change, end.
 	w := m.Warps(7.5)
-	if len(w) != 17 || !near(w[len(w)-1].Seconds, 7.5) || !near(w[len(w)-1].Beat, 16.75) {
-		t.Fatalf("warps %d %+v", len(w), w[len(w)-1])
+	if len(w) != 3 || !near(w[1].Beat, 8) || !near(w[1].Seconds, 4) || !near(w[2].Seconds, 7.5) || !near(w[2].Beat, 16.75) {
+		t.Fatalf("warps %+v", w)
 	}
 	// Tail extrapolates the last interval (0.4 s).
 	if !near(m.Beat(6.8+0.4), 16) {
@@ -166,7 +163,9 @@ func TestCleanDoubleTime(t *testing.T) {
 	for _, d := range iv {
 		beats = append(beats, beats[len(beats)-1]+d)
 	}
-	m, err := Build(beats, nil, beats[len(beats)-1]+1)
+	// 40 beats of a busy clip are too few for a confident tempo map;
+	// Force still shows what cleaning did.
+	m, err := BuildWith(beats, nil, beats[len(beats)-1]+1, Options{Force: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,11 +183,9 @@ func TestCleanDoubleTime(t *testing.T) {
 	}
 }
 
-func TestTimeSignatures(t *testing.T) {
-	// Bars of 4,4,3,3,4,4,8,4,4,5,4,4: 3/4 run kept, 8 merged (missed
-	// downbeat), isolated 5 kept.
-	counts := []int{4, 4, 3, 3, 4, 4, 8, 4, 4, 5, 4, 4}
-	var beats, downs []float64
+// barBeats lays out bars of the given beat counts at 120 BPM and returns
+// the beats plus a downbeat on every bar line (and a closing one).
+func barBeats(counts []int) (beats, downs []float64) {
 	tm := 0.0
 	for _, c := range counts {
 		downs = append(downs, tm)
@@ -197,35 +194,170 @@ func TestTimeSignatures(t *testing.T) {
 			tm += 0.5
 		}
 	}
-	beats = append(beats, tm) // closing downbeat
-	downs = append(downs, tm)
-	m, err := Build(beats, downs, tm)
+	return append(beats, tm), append(downs, tm)
+}
+
+func numerators(m *Map) []int {
+	var out []int
+	for _, b := range m.Bars {
+		out = append(out, b.Numerator)
+	}
+	return out
+}
+
+func sigNumerators(m *Map) []int {
+	var out []int
+	for _, s := range m.TimeSignatures() {
+		out = append(out, s.Numerator)
+	}
+	return out
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestTimeSignatures(t *testing.T) {
+	// A 3/4 run is a signature change; a missed downbeat (8 beats) is two
+	// bars of 4; an odd bar followed by a long stretch in phase with it
+	// stays.
+	counts := []int{4, 4, 3, 3, 3, 4, 4, 8, 4, 4, 5, 4, 4, 4, 4, 4, 4}
+	beats, downs := barBeats(counts)
+	m, err := Build(beats, downs, beats[len(beats)-1])
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []int{4, 4, 3, 3, 4, 4, 4, 4, 4, 5, 4, 4}
-	for i, b := range m.Bars {
-		if b.Numerator != want[i] || b.Count != counts[i] {
-			t.Fatalf("bar %d: %+v want numerator %d", i, b, want[i])
-		}
+	want := []int{4, 4, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 4, 4, 4, 4, 4, 4, 4}
+	if got := numerators(m); !equalInts(got, want) {
+		t.Fatalf("bars %v, want %v", got, want)
 	}
-	sigs := m.TimeSignatures()
-	got := []int{}
-	for _, s := range sigs {
-		got = append(got, s.Numerator)
-	}
-	if len(got) != 5 || got[0] != 4 || got[1] != 3 || got[2] != 4 || got[3] != 5 || got[4] != 4 {
-		t.Fatalf("signatures %v (%+v)", got, sigs)
+	if got := sigNumerators(m); !equalInts(got, []int{4, 3, 4, 5, 4}) {
+		t.Fatalf("signatures %v", got)
 	}
 	// The 3/4 change sits on its downbeat (beat 8).
-	if !near(sigs[1].Beat, 8) {
-		t.Fatalf("3/4 at %v", sigs[1].Beat)
+	if s := m.TimeSignatures()[1]; !near(s.Beat, 8) {
+		t.Fatalf("3/4 at %v", s.Beat)
 	}
-	// Edges: a leading or trailing 8 next to 4s is a missed downbeat too.
-	if got := effectiveNumerators([]int{8, 4, 4, 8}); got[0] != 4 || got[3] != 4 {
-		t.Fatalf("edge merge %v", got)
+}
+
+func TestBarsNeverOneBeat(t *testing.T) {
+	// 16 bars of 4/4 where the detector calls every beat a downbeat for
+	// eight beats in the middle, plus one stray downbeat on a backbeat.
+	beats, downs := barBeats([]int{4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4})
+	var noisy []float64
+	for i, d := range downs {
+		noisy = append(noisy, d)
+		if i == 3 {
+			noisy = append(noisy, d+1) // stray, on beat 3
+		}
 	}
-	if got := effectiveNumerators([]int{5, 4, 4, 3}); got[0] != 5 || got[3] != 3 {
-		t.Fatalf("edge non-multiple kept %v", got)
+	for k := 28; k < 36; k++ {
+		noisy = append(noisy, beats[k])
+	}
+	sort.Float64s(noisy)
+	m, err := Build(beats, noisy, beats[len(beats)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range numerators(m) {
+		if n != 4 {
+			t.Fatalf("bars %v: the noise should not change the 4/4", numerators(m))
+		}
+	}
+	if len(m.TimeSignatures()) != 1 {
+		t.Fatalf("signatures %+v", m.TimeSignatures())
+	}
+}
+
+func TestSingleOddBarWithoutSupport(t *testing.T) {
+	// A lone bar of 5 detected in 4/4 whose following downbeats are back
+	// in the old phase is detector noise: no 5/4.
+	beats, downs := barBeats([]int{4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4})
+	downs = append(downs[:6], append([]float64{downs[6] - 0.5}, downs[7:]...)...) // one downbeat a beat early
+	m, err := Build(beats, downs, beats[len(beats)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range numerators(m) {
+		if n != 4 {
+			t.Fatalf("bars %v", numerators(m))
+		}
+	}
+}
+
+// quantize rounds beat times to Beat This!'s 50 fps frames.
+func quantize(b []float64) []float64 {
+	out := make([]float64, len(b))
+	for i, v := range b {
+		out[i] = math.Round(v*50) / 50
+	}
+	return out
+}
+
+func TestFrameQuantizedSteadyIsConstant(t *testing.T) {
+	// 111 BPM on 20 ms frames: per-beat intervals of 0.54 and 0.56 s
+	// (±1.9 %), but one tempo.
+	beats := quantize(steady(0.3, 111, 400))
+	m, err := Build(beats, every(beats, 4), 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Constant || math.Abs(m.BPM()-111) > 0.05 || m.TempoPoints() != nil {
+		t.Fatalf("constant=%v bpm=%v segments=%d", m.Constant, m.BPM(), m.Segments())
+	}
+}
+
+func TestFrameQuantizedStepIsTwoTempos(t *testing.T) {
+	// 64 beats at 100 then 64 at 130, on frames, plus a push of 40 ms on
+	// one beat: two tempos, the step on the right beat.
+	beats := append(steady(1, 100, 64), steady(1+64*0.6, 130, 64)...)
+	beats[30] += 0.04
+	beats = quantize(beats)
+	m, err := Build(beats, every(beats, 4), beats[len(beats)-1]+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pts := m.TempoPoints()
+	if m.Segments() != 2 || len(pts) != 3 || math.Abs(pts[0].BPM-100) > 0.3 || math.Abs(pts[2].BPM-130) > 0.3 {
+		t.Fatalf("segments %d, points %+v", m.Segments(), pts)
+	}
+	if k := pts[1].Beat - m.Beat(beats[0]); math.Abs(k-64) > 1 {
+		t.Fatalf("step at beat %v of the song, want 64", k)
+	}
+}
+
+func TestConfidenceLevelCheck(t *testing.T) {
+	beats := steady(0.5, 138, 200)
+	ref := 92.0 // 3:2
+	// A fully stable grid is kept even against a 3:2 reference ...
+	if _, err := BuildWith(beats, every(beats, 4), 90, Options{RefBPM: &ref}); err != nil {
+		t.Fatal(err)
+	}
+	// ... double and half time are the same level.
+	for _, r := range []float64{69, 276, 140} {
+		if _, err := BuildWith(beats, every(beats, 4), 90, Options{RefBPM: &r}); err != nil {
+			t.Fatalf("ref %v: %v", r, err)
+		}
+	}
+	// A wobbly one against 3:2 is refused: every 5th beat 60 ms late
+	// breaks the song into short stretches.
+	wob := append([]float64(nil), beats...)
+	for i := 4; i < len(wob); i += 3 {
+		wob[i] += 0.07
+		if i+1 < len(wob) {
+			wob[i+1] -= 0.07
+		}
+	}
+	_, err := BuildWith(wob, every(wob, 4), 90, Options{RefBPM: &ref})
+	if !errors.Is(err, ErrUncertain) {
+		t.Fatalf("want ErrUncertain, got %v", err)
 	}
 }

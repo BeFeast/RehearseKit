@@ -32,6 +32,9 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
         with:
+          # A pinned version is downloaded directly; "latest" asks the GitHub
+          # API anonymously and hits its rate limit from this runner.
+          version: "0.11.21"
           enable-cache: true
           cache-dependency-glob: backend/requirements-ci.txt
 
@@ -67,3 +70,52 @@ jobs:
 
       - name: Build frontend
         run: bun run build
+
+  go-tests:
+    name: Go vet and tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }
+
+      - name: Vet
+        run: go vet ./...
+
+      # Database, ffmpeg and xmllint checks skip when those are missing.
+      - name: Test
+        run: go test ./...
+
+  web-checks:
+    name: Web typecheck and tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # Includes the grid parity test against internal/pipeline/grid/testdata.
+      - name: Test
+        run: bun run test

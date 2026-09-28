@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"io"
 	"math"
@@ -19,17 +20,43 @@ import (
 	"github.com/BeFeast/RehearseKit/internal/pipeline/analysis"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/dawproject"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/grid"
+	"github.com/BeFeast/RehearseKit/internal/pipeline/midi"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/peaks"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/wavtest"
 )
 
 var update = flag.Bool("update", false, "rewrite testdata/export-project.xml")
 
-// TestExportSeedEqualsS1 is the regression that pins the export to the
+// workerMIDI is midi/<stem>.mid as the worker's transcription stage writes
+// it for the drums (internal/worker/stages.go): notes in beats through the
+// grid, or at the single tempo when there is none.
+func workerMIDI(t *testing.T, m *grid.Map, bpm float64, notes analysis.Notes) []byte {
+	t.Helper()
+	beat := func(sec float64) float64 {
+		if m != nil {
+			return m.Beat(sec)
+		}
+		return sec * bpm / 60
+	}
+	mt := midi.Track{Name: dawproject.TrackName("drums"), Channel: 9}
+	for _, n := range notes.Notes {
+		start := beat(n.Onset)
+		mt.Notes = append(mt.Notes, midi.Note{Beat: start, Duration: midi.Duration("drums", start, beat(n.Offset)), Key: n.Pitch, Velocity: n.Velocity})
+	}
+	var buf bytes.Buffer
+	if err := midi.Write(&buf, m, bpm, mt); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestExportSeedEqualsWorker is the regression that pins the export to the
 // worker: the untouched seed of a real stand job (a 45 s clip transcribed
-// on the CPU stand) exports byte for byte the midi/drums.mid the S1
-// finalize wrote for it.
-func TestExportSeedEqualsS1(t *testing.T) {
+// on the CPU stand) exports byte for byte the midi/drums.mid the worker
+// writes for it, with the job's grid (refused on this clip: it is on an
+// unclear metrical level, so both fall back to the single tempo) and with
+// the grid forced.
+func TestExportSeedEqualsWorker(t *testing.T) {
 	dir := filepath.Join("testdata", "clip45")
 	ab, err := os.ReadFile(filepath.Join(dir, "analysis.json"))
 	if err != nil {
@@ -47,39 +74,42 @@ func TestExportSeedEqualsS1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const duration = 45.0
-	m, err := grid.Build(res.Grid.Beats, res.Grid.Downbeats, duration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	doc, warnings := Seed(notes, raw, gm(t), time.Now())
-	if len(warnings) != 0 || len(doc.Events) != 83 {
-		t.Fatalf("seed: %d events, warnings %v", len(doc.Events), warnings)
-	}
 	var tempo struct {
 		BPM float64 `json:"bpm"`
 	}
 	tb, _ := os.ReadFile(filepath.Join(dir, "tempo.json"))
-	_ = json.Unmarshal(tb, &tempo)
-	e := &Export{ProjectName: "ES clip45", Duration: duration, BPM: tempo.BPM, Grid: m, Profile: gm(t), Events: doc.Events}
-	got, err := e.MIDI()
+	if err := json.Unmarshal(tb, &tempo); err != nil {
+		t.Fatal(err)
+	}
+	const duration = 45.0
+	doc, warnings := Seed(notes, raw, gm(t), time.Now())
+	if len(warnings) != 0 || len(doc.Events) != 83 {
+		t.Fatalf("seed: %d events, warnings %v", len(doc.Events), warnings)
+	}
+	job, jobErr := grid.BuildWith(res.Grid.Beats, res.Grid.Downbeats, duration, grid.Options{RefBPM: &tempo.BPM})
+	if !errors.Is(jobErr, grid.ErrUncertain) {
+		t.Fatalf("clip45 grid: want ErrUncertain, got %v", jobErr)
+	}
+	forced, err := grid.BuildWith(res.Grid.Beats, res.Grid.Downbeats, duration, grid.Options{RefBPM: &tempo.BPM, Force: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := os.ReadFile(filepath.Join(dir, "drums-s1.mid"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("export of the seed differs from S1 midi/drums.mid (%d vs %d bytes)", len(got), len(want))
-	}
-	// Moving one hit changes the file; the others keep their ticks.
-	moved := append([]Event(nil), doc.Events...)
-	moved[10].T += 0.011
-	e.Events = moved
-	got2, _ := e.MIDI()
-	if bytes.Equal(got, got2) {
-		t.Fatal("a moved hit did not change the MIDI")
+	for _, m := range []*grid.Map{job, forced} {
+		e := &Export{ProjectName: "ES clip45", Duration: duration, BPM: tempo.BPM, Grid: m, Profile: gm(t), Events: doc.Events}
+		got, err := e.MIDI()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, workerMIDI(t, m, tempo.BPM, notes)) {
+			t.Fatalf("grid %v: export of the seed differs from the worker's midi/drums.mid", m != nil)
+		}
+		// Moving one hit changes the file; the others keep their ticks.
+		moved := append([]Event(nil), doc.Events...)
+		moved[10].T += 0.011
+		e.Events = moved
+		if got2, _ := e.MIDI(); bytes.Equal(got, got2) {
+			t.Fatal("a moved hit did not change the MIDI")
+		}
 	}
 }
 
