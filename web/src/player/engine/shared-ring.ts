@@ -41,6 +41,17 @@ export class SharedRings {
     return Atomics.load(this.ctrl, CTRL.READ_POS);
   }
 
+  /**
+   * The audio thread's clock offset: stream frame S reaches the output at
+   * audio frame S + offset (32-bit wrapping). Null after a flush until the
+   * first quantum of the new stream.
+   */
+  clockOffset(): number | null {
+    if (Atomics.load(this.ctrl, CTRL.CLOCK_VALID) === 0) return null;
+    return Atomics.load(this.ctrl, CTRL.CLOCK_OFFSET);
+  }
+
+
   writePos(stem: number): number {
     return Atomics.load(this.ctrl, CTRL.WRITE_POS0 + stem);
   }

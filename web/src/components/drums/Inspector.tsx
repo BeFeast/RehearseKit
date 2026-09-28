@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { describeAutosave } from '../../lib/drums/autosave';
-import { primary } from '../../lib/drums/model';
+import { primary, selectedHits } from '../../lib/drums/model';
 import { ARTICULATION_KEYS, ARTICULATIONS, articulationTitle, midiKeyLabel, velTo127 } from '../../lib/drums/taxonomy';
 import type { DrumEditorHandle } from '../../player/use-drum-editor';
 
@@ -89,6 +89,17 @@ export function Inspector({ ed }: { ed: DrumEditorHandle }) {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 'var(--rk-space-3)' }}>
+            <button
+              className="rk-btn rk-btn--primary rk-btn--sm"
+              type="button"
+              style={{ flex: 1 }}
+              onClick={() => ed.audition?.play(selectedHits(ed.state))}
+              disabled={!ed.audition || ed.audition.status !== 'ready'}
+              title={ed.audition?.status === 'ready' ? 'Play the selected hits through the sample kit' : 'Switch AUDITION to MIDI KIT and press play once to load the kit'}
+              data-testid="drums-audition"
+            >
+              AUDITION
+            </button>
             <button className="rk-btn rk-btn--mono rk-btn--sm" type="button" style={{ flex: 1 }} onClick={ed.ops.deleteSel}>
               DELETE
             </button>

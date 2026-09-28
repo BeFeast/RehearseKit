@@ -17,7 +17,7 @@
  * meter.releaseDbPerS (−20 dB/s); the hold lasts meter.holdSeconds (1.5 s).
  */
 
-/* global AudioWorkletProcessor, registerProcessor, sampleRate */
+/* global AudioWorkletProcessor, registerProcessor, sampleRate, currentFrame */
 
 class LabStreamProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -44,6 +44,8 @@ class LabStreamProcessor extends AudioWorkletProcessor {
       if (msg && msg.type === 'flush') {
         Atomics.store(this.ctrl, this.C.READ_POS, 0);
         Atomics.store(this.ctrl, this.C.ENDED, 0);
+        // The clock mapping belongs to the old stream until the first quantum of the new one.
+        if (this.C.CLOCK_VALID !== undefined) Atomics.store(this.ctrl, this.C.CLOCK_VALID, 0);
         this.port.postMessage({ type: 'flushed', generation: msg.generation });
       }
     };
@@ -95,6 +97,14 @@ class LabStreamProcessor extends AudioWorkletProcessor {
     }
   }
 
+  /** Stream frame r reaches the output at currentFrame + delay: publish the offset (one word, never torn). */
+  publishClock(r, delay) {
+    const C = this.C;
+    if (C.CLOCK_OFFSET === undefined || typeof currentFrame !== 'number') return;
+    Atomics.store(this.ctrl, C.CLOCK_OFFSET, (currentFrame + delay - r) | 0);
+    Atomics.store(this.ctrl, C.CLOCK_VALID, 1);
+  }
+
   process(_inputs, outputs) {
     const ctrl = this.ctrl;
     const C = this.C;
@@ -124,6 +134,8 @@ class LabStreamProcessor extends AudioWorkletProcessor {
     }
     if (avail < need) {
       Atomics.add(ctrl, C.UNDERRUNS, 1);
+      // Stalled: frame r now reaches the output a quantum later at the earliest.
+      this.publishClock(r, quantum);
       this.releaseMeters(quantum);
       return true;
     }
@@ -143,6 +155,8 @@ class LabStreamProcessor extends AudioWorkletProcessor {
       this.meterStem(i, rings, r, need);
     }
 
+    // Frame r is output at currentFrame (the start of this quantum).
+    this.publishClock(r, 0);
     Atomics.store(ctrl, C.READ_POS, (r + need) | 0);
     Atomics.add(ctrl, C.QUANTA, 1);
     return true;

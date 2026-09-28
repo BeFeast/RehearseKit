@@ -1,0 +1,750 @@
+{
+ "name": "Virtuosity Drums (subset)",
+ "license": "CC0-1.0",
+ "source": "https://github.com/sfzinstruments/virtuosity_drums",
+ "commit": "9f04cf9a734527edfbb0a4eee1f674e45bbf71bc",
+ "sampleRate": 48000,
+ "format": "flac, 16-bit, 48 kHz; stereo where the source mic pair is stereo (oh), mono for kickmic",
+ "mic": {
+  "default": "oh",
+  "kick": "kickmic",
+  "note": "oh = stereo overhead pair (Samples/oh). The kick was taken from the close mic (Samples/kickmic, mono): on the overheads the hardest kick peaks at -20.7 dBFS vs -0.4 for the snare and is mostly room, so normalising it would lift rumble and noise by 20 dB."
+ },
+ "velocityLayers": "3 per articulation. 4-layer sources (kick, hhc, hho): vl2/vl3/vl4 kept, ghost layer vl1 dropped and its range folded into layer 1. 16-layer sources (stick, tomh, tomf): vl5/vl11/vl15. 36-layer snare center: vl10/vl23/vl34. Native 3-layer sources (hhp, ride, bell, crash): all three, first round-robin.",
+ "normalisation": "per articulation: one gain so the hardest layer peaks at -1 dBFS; softer layers keep their relative level (see appliedGainDb / peakDbfs)",
+ "trim": {
+  "leadingSilence": "silenceremove start_threshold=-60dB",
+  "fadeOut": "30 ms linear",
+  "hhpOffset": "first 1000 samples (20.8 ms) of the pedal samples skipped, as the library does with offset=$HH_PPREROLL in Programs/mappings/oh_all.sfz",
+  "seconds": {
+   "kick": 0.8,
+   "snare": 0.8,
+   "stick": 0.8,
+   "hhc": 0.8,
+   "hhp": 0.8,
+   "tomh": 0.8,
+   "tomm": 0.8,
+   "tomf": 0.8,
+   "hho": 1.5,
+   "ride": 2.0,
+   "bell": 2.0,
+   "crash": 3.0
+  }
+ },
+ "articulations": {
+  "kick": [
+   {
+    "file": "kick-1.flac",
+    "vel": [
+     1,
+     63
+    ],
+    "gain": 1.0,
+    "src": "Samples/kickmic/kick/kickmic_kick_snon_vl2_rr1.flac",
+    "srcVel": [
+     32,
+     63
+    ],
+    "mic": "kickmic",
+    "channels": 1,
+    "seconds": 0.8,
+    "bytes": 18522,
+    "peakDbfs": -19.6,
+    "appliedGainDb": 0.7
+   },
+   {
+    "file": "kick-2.flac",
+    "vel": [
+     64,
+     95
+    ],
+    "gain": 1.0,
+    "src": "Samples/kickmic/kick/kickmic_kick_snon_vl3_rr1.flac",
+    "srcVel": [
+     64,
+     95
+    ],
+    "mic": "kickmic",
+    "channels": 1,
+    "seconds": 0.8,
+    "bytes": 19707,
+    "peakDbfs": -7.6,
+    "appliedGainDb": 0.7
+   },
+   {
+    "file": "kick-3.flac",
+    "vel": [
+     96,
+     127
+    ],
+    "gain": 1.0,
+    "src": "Samples/kickmic/kick/kickmic_kick_snon_vl4_rr1.flac",
+    "srcVel": [
+     96,
+     127
+    ],
+    "mic": "kickmic",
+    "channels": 1,
+    "seconds": 0.8,
+    "bytes": 21217,
+    "peakDbfs": -1.0,
+    "appliedGainDb": 0.7
+   }
+  ],
+  "snare": [
+   {
+    "file": "snare-1.flac",
+    "vel": [
+     1,
+     63
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/snare/oh_snare_center_vl10.flac",
+    "srcVel": [
+     32,
+     34
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 40048,
+    "peakDbfs": -19.3,
+    "appliedGainDb": -0.6
+   },
+   {
+    "file": "snare-2.flac",
+    "vel": [
+     64,
+     95
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/snare/oh_snare_center_vl23.flac",
+    "srcVel": [
+     78,
+     80
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 45013,
+    "peakDbfs": -10.8,
+    "appliedGainDb": -0.6
+   },
+   {
+    "file": "snare-3.flac",
+    "vel": [
+     96,
+     127
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/snare/oh_snare_center_vl34.flac",
+    "srcVel": [
+     117,
+     119
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 51766,
+    "peakDbfs": -1.0,
+    "appliedGainDb": -0.6
+   }
+  ],
+  "stick": [
+   {
+    "file": "stick-1.flac",
+    "vel": [
+     1,
+     63
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/snare/oh_snare_crossstick_vl5.flac",
+    "srcVel": [
+     32,
+     39
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 37261,
+    "peakDbfs": -22.1,
+    "appliedGainDb": 6.5
+   },
+   {
+    "file": "stick-2.flac",
+    "vel": [
+     64,
+     95
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/snare/oh_snare_crossstick_vl11.flac",
+    "srcVel": [
+     80,
+     87
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 45680,
+    "peakDbfs": -6.0,
+    "appliedGainDb": 6.5
+   },
+   {
+    "file": "stick-3.flac",
+    "vel": [
+     96,
+     127
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/snare/oh_snare_crossstick_vl15.flac",
+    "srcVel": [
+     112,
+     119
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 48873,
+    "peakDbfs": -1.0,
+    "appliedGainDb": 6.5
+   }
+  ],
+  "hhc": [
+   {
+    "file": "hhc-1.flac",
+    "vel": [
+     1,
+     63
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/hh/oh_hh_closed_vl2_rr1.flac",
+    "srcVel": [
+     32,
+     63
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 37621,
+    "peakDbfs": -15.0,
+    "appliedGainDb": 7.8
+   },
+   {
+    "file": "hhc-2.flac",
+    "vel": [
+     64,
+     95
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/hh/oh_hh_closed_vl3_rr1.flac",
+    "srcVel": [
+     64,
+     95
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 43708,
+    "peakDbfs": -10.1,
+    "appliedGainDb": 7.8
+   },
+   {
+    "file": "hhc-3.flac",
+    "vel": [
+     96,
+     127
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/hh/oh_hh_closed_vl4_rr1.flac",
+    "srcVel": [
+     96,
+     127
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 61392,
+    "peakDbfs": -1.0,
+    "appliedGainDb": 7.8
+   }
+  ],
+  "hho": [
+   {
+    "file": "hho-1.flac",
+    "vel": [
+     1,
+     63
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/hh/oh_hh_open_vl2_rr1.flac",
+    "srcVel": [
+     32,
+     63
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 1.5,
+    "bytes": 94138,
+    "peakDbfs": -19.4,
+    "appliedGainDb": -0.1
+   },
+   {
+    "file": "hho-2.flac",
+    "vel": [
+     64,
+     95
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/hh/oh_hh_open_vl3_rr1.flac",
+    "srcVel": [
+     64,
+     95
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 1.5,
+    "bytes": 104356,
+    "peakDbfs": -14.9,
+    "appliedGainDb": -0.1
+   },
+   {
+    "file": "hho-3.flac",
+    "vel": [
+     96,
+     127
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/hh/oh_hh_open_vl4_rr1.flac",
+    "srcVel": [
+     96,
+     127
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 1.5,
+    "bytes": 158378,
+    "peakDbfs": -1.0,
+    "appliedGainDb": -0.1
+   }
+  ],
+  "hhp": [
+   {
+    "file": "hhp-1.flac",
+    "vel": [
+     1,
+     42
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/hh/oh_hh_pedal_vl1_rr1.flac",
+    "srcVel": [
+     1,
+     42
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 59964,
+    "peakDbfs": -13.5,
+    "appliedGainDb": 20.5
+   },
+   {
+    "file": "hhp-2.flac",
+    "vel": [
+     43,
+     85
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/hh/oh_hh_pedal_vl2_rr1.flac",
+    "srcVel": [
+     43,
+     85
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 67528,
+    "peakDbfs": -5.0,
+    "appliedGainDb": 20.5
+   },
+   {
+    "file": "hhp-3.flac",
+    "vel": [
+     86,
+     127
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/hh/oh_hh_pedal_vl3_rr1.flac",
+    "srcVel": [
+     86,
+     127
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 68137,
+    "peakDbfs": -1.0,
+    "appliedGainDb": 20.5
+   }
+  ],
+  "tomh": [
+   {
+    "file": "tomh-1.flac",
+    "vel": [
+     1,
+     63
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/htom/oh_htom_center_vl5.flac",
+    "srcVel": [
+     32,
+     39
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 35944,
+    "peakDbfs": -14.6,
+    "appliedGainDb": 4.4
+   },
+   {
+    "file": "tomh-2.flac",
+    "vel": [
+     64,
+     95
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/htom/oh_htom_center_vl11.flac",
+    "srcVel": [
+     80,
+     87
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 40734,
+    "peakDbfs": -3.7,
+    "appliedGainDb": 4.4
+   },
+   {
+    "file": "tomh-3.flac",
+    "vel": [
+     96,
+     127
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/htom/oh_htom_center_vl15.flac",
+    "srcVel": [
+     112,
+     119
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 45718,
+    "peakDbfs": -1.0,
+    "appliedGainDb": 4.4
+   }
+  ],
+  "tomm": [
+   {
+    "file": "tomm-1.flac",
+    "vel": [
+     1,
+     63
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/htom/oh_htom_center_vl5.flac",
+    "srcVel": [
+     32,
+     39
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 35229,
+    "peakDbfs": -14.6,
+    "appliedGainDb": 4.4
+   },
+   {
+    "file": "tomm-2.flac",
+    "vel": [
+     64,
+     95
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/htom/oh_htom_center_vl11.flac",
+    "srcVel": [
+     80,
+     87
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 39633,
+    "peakDbfs": -3.7,
+    "appliedGainDb": 4.4
+   },
+   {
+    "file": "tomm-3.flac",
+    "vel": [
+     96,
+     127
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/htom/oh_htom_center_vl15.flac",
+    "srcVel": [
+     112,
+     119
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 44288,
+    "peakDbfs": -1.0,
+    "appliedGainDb": 4.4
+   }
+  ],
+  "tomf": [
+   {
+    "file": "tomf-1.flac",
+    "vel": [
+     1,
+     63
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/ltom/oh_ltom_center_vl5.flac",
+    "srcVel": [
+     32,
+     39
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 33783,
+    "peakDbfs": -22.4,
+    "appliedGainDb": 4.0
+   },
+   {
+    "file": "tomf-2.flac",
+    "vel": [
+     64,
+     95
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/ltom/oh_ltom_center_vl11.flac",
+    "srcVel": [
+     80,
+     87
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 38976,
+    "peakDbfs": -7.1,
+    "appliedGainDb": 4.0
+   },
+   {
+    "file": "tomf-3.flac",
+    "vel": [
+     96,
+     127
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/ltom/oh_ltom_center_vl15.flac",
+    "srcVel": [
+     112,
+     119
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 0.8,
+    "bytes": 42725,
+    "peakDbfs": -1.0,
+    "appliedGainDb": 4.0
+   }
+  ],
+  "ride": [
+   {
+    "file": "ride-1.flac",
+    "vel": [
+     1,
+     42
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/ride/oh_ride_ride_vl1_rr1.flac",
+    "srcVel": [
+     1,
+     42
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 2.0,
+    "bytes": 116603,
+    "peakDbfs": -19.4,
+    "appliedGainDb": 9.9
+   },
+   {
+    "file": "ride-2.flac",
+    "vel": [
+     43,
+     85
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/ride/oh_ride_ride_vl2_rr1.flac",
+    "srcVel": [
+     43,
+     85
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 2.0,
+    "bytes": 163045,
+    "peakDbfs": -6.6,
+    "appliedGainDb": 9.9
+   },
+   {
+    "file": "ride-3.flac",
+    "vel": [
+     86,
+     127
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/ride/oh_ride_ride_vl3_rr1.flac",
+    "srcVel": [
+     86,
+     127
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 2.0,
+    "bytes": 185992,
+    "peakDbfs": -1.0,
+    "appliedGainDb": 9.9
+   }
+  ],
+  "bell": [
+   {
+    "file": "bell-1.flac",
+    "vel": [
+     1,
+     42
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/ride/oh_ride_bell_vl1_rr1.flac",
+    "srcVel": [
+     1,
+     42
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 2.0,
+    "bytes": 125497,
+    "peakDbfs": -17.9,
+    "appliedGainDb": 12.9
+   },
+   {
+    "file": "bell-2.flac",
+    "vel": [
+     43,
+     85
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/ride/oh_ride_bell_vl2_rr1.flac",
+    "srcVel": [
+     43,
+     85
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 2.0,
+    "bytes": 157023,
+    "peakDbfs": -5.8,
+    "appliedGainDb": 12.9
+   },
+   {
+    "file": "bell-3.flac",
+    "vel": [
+     86,
+     127
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/ride/oh_ride_bell_vl3_rr1.flac",
+    "srcVel": [
+     86,
+     127
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 2.0,
+    "bytes": 212215,
+    "peakDbfs": -1.0,
+    "appliedGainDb": 12.9
+   }
+  ],
+  "crash": [
+   {
+    "file": "crash-1.flac",
+    "vel": [
+     1,
+     42
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/crash/oh_crash_crash_vl1_rr1.flac",
+    "srcVel": [
+     1,
+     42
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 3.0,
+    "bytes": 221085,
+    "peakDbfs": -14.5,
+    "appliedGainDb": 13.7
+   },
+   {
+    "file": "crash-2.flac",
+    "vel": [
+     43,
+     85
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/crash/oh_crash_crash_vl2_rr1.flac",
+    "srcVel": [
+     43,
+     85
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 3.0,
+    "bytes": 251040,
+    "peakDbfs": -8.6,
+    "appliedGainDb": 13.7
+   },
+   {
+    "file": "crash-3.flac",
+    "vel": [
+     86,
+     127
+    ],
+    "gain": 1.0,
+    "src": "Samples/oh/crash/oh_crash_crash_vl3_rr1.flac",
+    "srcVel": [
+     86,
+     127
+    ],
+    "mic": "oh",
+    "channels": 2,
+    "seconds": 3.0,
+    "bytes": 294269,
+    "peakDbfs": -1.0,
+    "appliedGainDb": 13.7
+   }
+  ]
+ },
+ "substitutions": {
+  "tomm": "kit has only two toms (htom, ltom); tomm = htom center hit pitched down 3 semitones (ffmpeg asetrate=40363,aresample=48000; same source files as tomh)",
+  "tomf": "ltom (the kit's low/floor tom) used as-is",
+  "stick": "snare cross-stick articulation (snare_crossstick) used for GM side stick"
+ },
+ "totalBytes": 3107108
+}

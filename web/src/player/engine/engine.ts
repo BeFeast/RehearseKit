@@ -112,6 +112,8 @@ export class StreamEngine {
   private node: AudioWorkletNode | null = null;
   private gains: GainNode[] = [];
   private master: GainNode | null = null;
+  private aux: GainNode | null = null;
+  private direct: GainNode | null = null;
   private analysers: AnalyserNode[] = [];
   private analyserBuf: Float32Array<ArrayBuffer> | null = null;
   private masterFollow: MasterMeter = { left: zeroMeter(), right: zeroMeter() };
@@ -132,6 +134,7 @@ export class StreamEngine {
   private errorMessage: string | null = null;
   private masterValue = 1;
   private muted: boolean[] = [];
+  private forcedMute: boolean[] = [];
   private soloed: boolean[] = [];
   private gainValues: number[] = [];
   private listeners = new Set<(state: EngineState) => void>();
@@ -158,6 +161,7 @@ export class StreamEngine {
       fetchImpl: options.fetchImpl,
     };
     this.muted = options.stems.map(() => false);
+    this.forcedMute = options.stems.map(() => false);
     this.soloed = options.stems.map(() => false);
     this.gainValues = options.stems.map(() => 1);
   }
@@ -191,6 +195,46 @@ export class StreamEngine {
   get loopEnabled(): boolean {
     return this.loopOn;
   }
+
+  /** The AudioContext once init() ran; null before. Scheduling samples on it keeps them on the stems' clock. */
+  get context(): AudioContext | null {
+    return this.ctx;
+  }
+
+  /** Where auxiliary sources (the sample kit) connect; null before init(). */
+  get auxInput(): AudioNode | null {
+    return this.aux;
+  }
+
+  /** Output for immediate auditions: follows the master level, not the transport. */
+  get directInput(): AudioNode | null {
+    return this.direct;
+  }
+
+  /** The play plan the worklet is consuming (stream frame → song frame); null while stopped, priming or flushing. */
+  get playPlan(): PlayPlan | null {
+    return this.stateValue === 'playing' && this.pendingFlush === null ? this.plan : null;
+  }
+
+  /** Increments on every seek/replan/stop; scheduled samples belong to one generation. */
+  get streamGeneration(): number {
+    return this.generation;
+  }
+
+  /**
+   * Audio-clock snapshot for schedulers: the stream frame reaching the
+   * output at the context time now, plus the generation and underrun count.
+   * Null unless playing a settled plan (not priming, not flushing).
+   */
+  clock(): { streamNow: number; ctxTime: number; generation: number; underruns: number } | null {
+    if (!this.ctx || !this.rings || this.stateValue !== 'playing' || !this.plan || this.pendingFlush !== null) return null;
+    const offset = this.rings.clockOffset();
+    if (offset === null) return null;
+    const ctxTime = this.ctx.currentTime;
+    const ctxFrame = Math.round(ctxTime * this.ctx.sampleRate) | 0;
+    return { streamNow: (ctxFrame - offset) | 0, ctxTime, generation: this.generation, underruns: this.rings.underruns() };
+  }
+
 
   /** Current song position in seconds. */
   get position(): number {
@@ -246,6 +290,18 @@ export class StreamEngine {
     const master = ctx.createGain();
     master.gain.value = 0;
     master.connect(ctx.destination);
+    // Auxiliary input: sample playback (the drum kit audition) joins the
+    // master here, after the stem faders, so it follows the master level.
+    const aux = ctx.createGain();
+    aux.gain.value = 1;
+    aux.connect(master);
+    this.aux = aux;
+    // Immediate audition (a hit played on demand, transport stopped or
+    // not): after the master level but not behind the transport gate.
+    const direct = ctx.createGain();
+    direct.gain.value = this.masterValue;
+    direct.connect(ctx.destination);
+    this.direct = direct;
     // Master L/R metering: split the summed signal and analyse each side.
     const splitter = ctx.createChannelSplitter(2);
     master.connect(splitter);
@@ -369,6 +425,7 @@ export class StreamEngine {
   /** Master bus gain (linear, 0..2). Ramps with the transport. */
   setMasterGain(value: number): void {
     this.masterValue = Math.max(0, Math.min(value, 2));
+    if (this.direct && this.ctx) this.direct.gain.setTargetAtTime(this.masterValue, this.ctx.currentTime, 0.01);
     if (this.master && this.ctx && this.stateValue === 'playing') {
       this.master.gain.setTargetAtTime(this.masterValue, this.ctx.currentTime, 0.01);
     }
@@ -381,6 +438,22 @@ export class StreamEngine {
   setGain(index: number, value: number): void {
     this.gainValues[index] = Math.max(0, Math.min(value, 2));
     this.applyGain(index);
+  }
+
+  /**
+   * A mute layered over the mixer's own (used while the sample kit stands in
+   * for the drum stem); mix state is not touched, so leaving the mode
+   * restores the fader/mute exactly.
+   */
+  setForcedMute(index: number, on: boolean): void {
+    if (index < 0 || index >= this.forcedMute.length || this.forcedMute[index] === on) return;
+    this.forcedMute[index] = on;
+    this.applyGain(index);
+    this.notify();
+  }
+
+  isForcedMuted(index: number): boolean {
+    return Boolean(this.forcedMute[index]);
   }
 
   setMute(index: number, muted: boolean): void {
@@ -511,7 +584,7 @@ export class StreamEngine {
   }
 
   private effectiveGain(index: number): number {
-    return this.muted[index] || this.isSilenced(index) ? 0 : this.gainValues[index];
+    return this.muted[index] || this.forcedMute[index] || this.isSilenced(index) ? 0 : this.gainValues[index];
   }
 
   private applyGain(index: number): void {

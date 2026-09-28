@@ -482,6 +482,17 @@ Routes (`internal/drums/handlers.go`):
 
 Retention and `DELETE` remove `edits/` and `mixes/` with the job directory.
 
+The SPA side (`web/src/components/drums/`, `web/src/player/use-drum-editor.ts`)
+opens as the DRUM EDITOR tab of `/jobs/{id}?tab=drums` for the owner of a
+completed, transcribed job. Its **MIDI KIT** audition plays the edited hits
+through a CC0 sample kit scheduled on the engine's audio clock — see
+[drum-kit.md](drum-kit.md) for the kit's origin, the scheduler and the
+`web/scripts/build-kit.sh` rebuild. `web/scripts/kit-verify.mjs` drives the
+audition in a headless Chrome over CDP (sign in, play, MIDI KIT, seek, loop)
+and checks that every unmuted hit is queued exactly once per pass; the page
+must be a secure context (localhost or https) for `SharedArrayBuffer`, so a
+LAN stand is reached through an SSH tunnel to the browser host.
+
 ## YouTube preview
 
 `POST /api/v1/youtube/preview` with `{"url":"https://youtu.be/<id>"}` returns
