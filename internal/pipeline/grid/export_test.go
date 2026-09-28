@@ -28,11 +28,17 @@ type sample struct {
 	Beat    float64 `json:"beat"`
 }
 
+// gridInput is testdata/grid-<name>.json: a beat tracker's output for a
+// track, the librosa tempo of the same audio (null when not confident) and,
+// for synthetic tracks, the true beats and downbeats.
 type gridInput struct {
-	Name      string    `json:"name"`
-	Duration  float64   `json:"duration"`
-	Beats     []float64 `json:"beats"`
-	Downbeats []float64 `json:"downbeats"`
+	Name         string    `json:"name"`
+	Duration     float64   `json:"duration"`
+	Beats        []float64 `json:"beats"`
+	Downbeats    []float64 `json:"downbeats"`
+	LibrosaBPM   *float64  `json:"librosa_bpm"`
+	RefBeats     []float64 `json:"ref_beats"`
+	RefDownbeats []float64 `json:"ref_downbeats"`
 }
 
 func loadInputs(t *testing.T) []gridInput {
@@ -56,9 +62,16 @@ func loadInputs(t *testing.T) []gridInput {
 	return out
 }
 
+// buildInput builds a fixture's map with Force: the export goldens check
+// the Beat/Seconds math a client ports, which must hold for a refused
+// grid too (TestConfidence checks which fixtures are refused).
+func buildInput(in gridInput) (*Map, error) {
+	return BuildWith(in.Beats, in.Downbeats, in.Duration, Options{RefBPM: in.LibrosaBPM, Force: true})
+}
+
 func buildFixture(t *testing.T, in gridInput) exportFixture {
 	t.Helper()
-	m, err := Build(in.Beats, in.Downbeats, in.Duration)
+	m, err := buildInput(in)
 	if err != nil {
 		t.Fatalf("%s: %v", in.Name, err)
 	}
@@ -110,7 +123,7 @@ func TestExportFixtures(t *testing.T) {
 // original on every sample, and Seconds inverts Beat.
 func TestExportRoundTrip(t *testing.T) {
 	for _, in := range loadInputs(t) {
-		m, err := Build(in.Beats, in.Downbeats, in.Duration)
+		m, err := buildInput(in)
 		if err != nil {
 			t.Fatal(err)
 		}

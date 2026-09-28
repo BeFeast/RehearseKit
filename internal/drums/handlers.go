@@ -229,7 +229,9 @@ func (h *Handlers) load(w http.ResponseWriter, r *http.Request) (*source, bool) 
 	case res.Grid == nil:
 		s.gridErr = "beat tracker produced no grid"
 	default:
-		m, err := grid.Build(res.Grid.Beats, res.Grid.Downbeats, s.duration)
+		// Same inputs as the worker's export (jobs.detected_bpm is the
+		// librosa tempo it passes), so the editor and the export agree.
+		m, err := grid.BuildWith(res.Grid.Beats, res.Grid.Downbeats, s.duration, grid.Options{RefBPM: j.DetectedBPM})
 		if err != nil {
 			s.gridErr = err.Error()
 		} else {

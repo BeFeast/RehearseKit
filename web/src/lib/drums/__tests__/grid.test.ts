@@ -113,20 +113,21 @@ describe('parity with the Go grid (testdata/export-*.json)', () => {
 
 describe('clip45 bars follow its time signatures', () => {
   const fx = fixtures.find((f) => f.name === 'clip45');
-  it.skipIf(!fx)('lead-in bar, six bars of 4/4, a 1/4 bar, then 4/4', () => {
-    // time_signatures: [{beat 4, 4/4}, {beat 28, 1/4}, {beat 29, 4/4}]
+  it.skipIf(!fx)('lead-in bar, five bars of 4/4, one bar of 5/4, then 4/4', () => {
+    // time_signatures: [{beat 4, 4/4}, {beat 24, 5/4}, {beat 29, 4/4}]; the
+    // bar tracker never draws a one-beat bar (the S1 grid had a 1/4 at 28).
     const grid = makeGrid(fx!.export);
     expect(grid.barAt(0)).toEqual({ bar: 1, startBeat: 0, numerator: 4 });
     expect(grid.barAt(4)).toEqual({ bar: 2, startBeat: 4, numerator: 4 });
-    expect(grid.barAt(27.5)).toEqual({ bar: 7, startBeat: 24, numerator: 4 });
-    expect(grid.barAt(28)).toEqual({ bar: 8, startBeat: 28, numerator: 1 });
-    expect(grid.barAt(29)).toEqual({ bar: 9, startBeat: 29, numerator: 4 });
-    expect(grid.barAt(33)).toEqual({ bar: 10, startBeat: 33, numerator: 4 });
-    // Second 0 is at beat 3.9565…: last beat of the lead-in bar.
+    expect(grid.barAt(27.5)).toEqual({ bar: 7, startBeat: 24, numerator: 5 });
+    expect(grid.barAt(28)).toEqual({ bar: 7, startBeat: 24, numerator: 5 });
+    expect(grid.barAt(29)).toEqual({ bar: 8, startBeat: 29, numerator: 4 });
+    expect(grid.barAt(33)).toEqual({ bar: 9, startBeat: 33, numerator: 4 });
+    // Second 0 is in the lead-in bar, a quarter of a beat before beat 1.
     const p0 = grid.position(0)!;
     expect(p0.bar).toBe(1);
-    expect(p0.beat).toBe(4);
-    expect(grid.formatPosition(grid.seconds(29))).toBe('9.1.000');
+    expect(p0.beat).toBe(1);
+    expect(grid.formatPosition(grid.seconds(29))).toBe('8.1.000');
   });
 });
 
