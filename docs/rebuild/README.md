@@ -399,6 +399,7 @@ curl -s -b cj $B/api/v1/jobs/<id>/drums/edits        # {doc, profile, grid, mode
 curl -s -b cj -X PUT -H 'Content-Type: application/json' \
   -d '{"base_rev":0,"events":[{"id":"u1","art":"snare","t":12.431,"vel":0.24,"src":"manual"}]}' \
   $B/api/v1/jobs/<id>/drums/edits                    # {edit_rev, updated_at}; 409 edit_conflict {edit_rev} when base_rev is stale
+curl -b cj -OJ -d edit_rev=1 $B/api/v1/jobs/<id>/drums/export   # <project>-drums-r1.zip: drums.mid + drums.dawproject from that revision
 
 # admin approval of self-registered accounts
 curl -s -b cj '$B/api/v1/admin/users?status=pending'
@@ -414,12 +415,15 @@ model output, never inside `package.zip`:
 ```
 jobs/<id>/notes/drums.json   model output (ADTOF, GM keys 36/38/42/48/49), immutable
 jobs/<id>/edits/drums.json   edit revision: a full snapshot of the events, written by PUT
+jobs/<id>/mixes/nodrums.wav  cached render for the export: every stem but drums summed at unity (32-bit float)
 ```
 
 `edits/drums.json` (`version` 1) carries `model_rev` (`adapter`, `model`,
 `count`, `notes_sha256` of the notes file it was derived from), `edit_rev`
 (0 = the untouched seed, +1 per saved PUT), `exported_rev`, `profile`
 (`gm`), `updated_at` and `events[]`: `{id, art, t, vel, src, model?}` —
+(`exported_rev` is `null` until the first export; exporting the seed writes
+the file with rev 0) —
 `id` matches `^[a-z][a-z0-9_-]{0,31}$` and is unique within the document
 (the seed uses `m<index>`, the editor `u<n>` for manual hits),
 `art` is one of the twelve articulations (`kick`, `snare`, `stick`, `hhc`,
@@ -458,7 +462,25 @@ Routes (`internal/drums/handlers.go`):
   `.part` + rename. Undo/redo history lives in the SPA only. `400
   invalid_edits` names the first bad event.
 
-Retention and `DELETE` remove `edits/` with the job directory.
+- `POST /api/v1/jobs/{id}/drums/export` with `{edit_rev}` (JSON) or
+  `edit_rev=N` (form, so a browser form submit downloads natively with the
+  session cookie; transcribe jobs are always owned, so no claim-token path
+  is needed) — owner only; `409 edit_conflict` unless `edit_rev` is the
+  current revision. A failure after the stream started aborts the
+  connection (no chunked terminator) so the browser reports a failed
+  download rather than saving a truncated archive.
+  Streams `<project>-drums-r<rev>.zip` holding `drums.mid` (SMF 1, 960 PPQ:
+  track 0 the tempo map and time signatures of the S1 grid, track 1 the
+  hits on channel 9 through the GM profile, a 16th each, the same
+  `midi.Duration` rule as the worker — the untouched seed exports byte for
+  byte the `midi/drums.mid` of the package) and `drums.dawproject` (tempo
+  and time-signature automation, section markers, the audio track **Mix (no
+  drums)** — `mixes/nodrums.wav`, rendered on the first export and reused —
+  the **Drums** stem, and the **Drums MIDI** notes track). `package.zip` is
+  not touched; `exported_rev` in `edits/drums.json` records the revision of
+  the last export.
+
+Retention and `DELETE` remove `edits/` and `mixes/` with the job directory.
 
 ## YouTube preview
 

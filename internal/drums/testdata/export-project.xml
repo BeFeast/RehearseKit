@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project version="1.0">
+  <Application name="RehearseKit" version="test"></Application>
+  <Transport>
+    <Tempo max="999.000000" min="20.000000" unit="bpm" value="120.000000" id="tempo" name="Tempo"></Tempo>
+    <TimeSignature denominator="4" numerator="4" id="timesig"></TimeSignature>
+  </Transport>
+  <Structure>
+    <Track contentType="audio" loaded="true" id="track-mix" name="Mix (no drums)">
+      <Channel audioChannels="2" destination="master-channel" role="regular" solo="false" id="channel-mix">
+        <Mute value="false" id="channel-mix-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="channel-mix-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="channel-mix-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+    <Track contentType="audio" loaded="true" id="track-drums" name="Drums" color="#FFA500">
+      <Channel audioChannels="2" destination="master-channel" role="regular" solo="false" id="channel-drums">
+        <Mute value="false" id="channel-drums-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="channel-drums-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="channel-drums-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+    <Track contentType="notes" loaded="true" id="track-drums-midi" name="Drums MIDI" color="#FFA500">
+      <Channel audioChannels="2" destination="master-channel" role="regular" solo="false" id="channel-drums-midi">
+        <Mute value="false" id="channel-drums-midi-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="channel-drums-midi-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="channel-drums-midi-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+    <Track contentType="audio notes" loaded="true" id="master" name="Master">
+      <Channel audioChannels="2" role="master" solo="false" id="master-channel">
+        <Mute value="false" id="master-channel-mute" name="Mute"></Mute>
+        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="master-channel-pan" name="Pan"></Pan>
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="master-channel-volume" name="Volume"></Volume>
+      </Channel>
+    </Track>
+  </Structure>
+  <Arrangement id="arrangement">
+    <Lanes timeUnit="beats" id="lanes">
+      <Lanes track="track-mix" id="lanes-mix">
+        <Clips id="clips-mix">
+          <Clip time="3.500000" duration="42.000000" playStart="0.000000" name="Mix (no drums)">
+            <Warps contentTimeUnit="seconds" timeUnit="beats">
+              <Audio algorithm="stretch" channels="2" duration="21.000000" sampleRate="48000">
+                <File path="audio/mix.wav"></File>
+              </Audio>
+              <Warp time="0.000000" contentTime="0.000000"></Warp>
+              <Warp time="42.000000" contentTime="21.000000"></Warp>
+            </Warps>
+          </Clip>
+        </Clips>
+      </Lanes>
+      <Lanes track="track-drums" id="lanes-drums">
+        <Clips id="clips-drums">
+          <Clip time="3.500000" duration="42.000000" playStart="0.000000" name="Drums">
+            <Warps contentTimeUnit="seconds" timeUnit="beats">
+              <Audio algorithm="stretch" channels="2" duration="21.000000" sampleRate="48000">
+                <File path="audio/drums.wav"></File>
+              </Audio>
+              <Warp time="0.000000" contentTime="0.000000"></Warp>
+              <Warp time="42.000000" contentTime="21.000000"></Warp>
+            </Warps>
+          </Clip>
+        </Clips>
+      </Lanes>
+      <Lanes track="track-drums-midi" id="lanes-drums-midi">
+        <Clips id="clips-drums-midi">
+          <Clip time="3.500000" duration="42.000000" playStart="0.000000" name="Drums MIDI">
+            <Notes id="notes-drums">
+              <Note time="0.500000" duration="0.250000" channel="9" key="36" vel="0.900000" rel="0.500000"></Note>
+              <Note time="1.000000" duration="0.250000" channel="9" key="42" vel="0.600000" rel="0.500000"></Note>
+              <Note time="2.475000" duration="0.250000" channel="9" key="38" vel="0.200000" rel="0.500000"></Note>
+              <Note time="2.500000" duration="0.250000" channel="9" key="46" vel="0.700000" rel="0.500000"></Note>
+              <Note time="16.500000" duration="0.250000" channel="9" key="49" vel="1.000000" rel="0.500000"></Note>
+            </Notes>
+          </Clip>
+        </Clips>
+      </Lanes>
+    </Lanes>
+    <Markers id="markers">
+      <Marker time="4.000000" name="Intro"></Marker>
+      <Marker time="20.000000" name="Verse"></Marker>
+    </Markers>
+  </Arrangement>
+</Project>

@@ -3,14 +3,18 @@ package drums
 import (
 	"errors"
 	"io/fs"
+	"log/slog"
+	"mime"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/BeFeast/RehearseKit/internal/api/respond"
 	"github.com/BeFeast/RehearseKit/internal/jobs"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/analysis"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/grid"
+	"github.com/BeFeast/RehearseKit/internal/stems"
 	"github.com/BeFeast/RehearseKit/internal/storage"
 )
 
@@ -20,16 +24,19 @@ import (
 //	GET  /api/v1/jobs/{id}/notes/{stem}   notes/<stem>.json (job read access)
 //	GET  /api/v1/jobs/{id}/drums/edits    edit revision + profile + grid (owner)
 //	PUT  /api/v1/jobs/{id}/drums/edits    {base_rev, events} → 409 edit_conflict when stale (owner)
+//	POST /api/v1/jobs/{id}/drums/export   {edit_rev} (JSON or form) → zip of drums.mid + drums.dawproject (owner)
 type Handlers struct {
 	jobs   *jobs.Handlers
 	layout storage.Layout
 	store  *Store
 	now    func() time.Time
+	// Version is written into the exported project as the generator version.
+	Version string
 }
 
 // NewHandlers builds the handlers on top of the job loader.
 func NewHandlers(jh *jobs.Handlers, layout storage.Layout) *Handlers {
-	return &Handlers{jobs: jh, layout: layout, store: NewStore(layout), now: time.Now}
+	return &Handlers{jobs: jh, layout: layout, store: NewStore(layout), now: time.Now, Version: "rk/3"}
 }
 
 // Register mounts the routes.
@@ -38,6 +45,7 @@ func (h *Handlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/jobs/{id}/notes/{stem}", h.notes)
 	mux.HandleFunc("GET /api/v1/jobs/{id}/drums/edits", h.getEdits)
 	mux.HandleFunc("PUT /api/v1/jobs/{id}/drums/edits", h.putEdits)
+	mux.HandleFunc("POST /api/v1/jobs/{id}/drums/export", h.export)
 }
 
 func (h *Handlers) analysis(w http.ResponseWriter, r *http.Request) {
@@ -140,8 +148,10 @@ type source struct {
 	raw      []byte
 	profile  Profile
 	duration float64
+	gridMap  *grid.Map
 	grid     *grid.Export
 	gridErr  string
+	sections []analysis.Section
 }
 
 // load resolves the job, checks the owner and reads the model output.
@@ -209,7 +219,7 @@ func (h *Handlers) load(w http.ResponseWriter, r *http.Request) (*source, bool) 
 		return nil, false
 	}
 	profile, _ := ProfileByID(DefaultProfile)
-	s := &source{job: j, notes: notes, raw: raw, profile: profile}
+	s := &source{job: j, notes: notes, raw: raw, profile: profile, sections: res.Sections}
 	if j.DurationSeconds != nil {
 		s.duration = *j.DurationSeconds
 	}
@@ -224,7 +234,7 @@ func (h *Handlers) load(w http.ResponseWriter, r *http.Request) (*source, bool) 
 			s.gridErr = err.Error()
 		} else {
 			e := m.Export()
-			s.grid = &e
+			s.gridMap, s.grid = m, &e
 		}
 	}
 	return s, true
@@ -303,4 +313,123 @@ func (h *Handlers) putEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusOK, SaveResponse{EditRev: doc.EditRev, UpdatedAt: doc.UpdatedAt})
+}
+
+// current returns the saved document or the seed.
+func (h *Handlers) current(s *source) (Doc, error) {
+	doc, err := h.store.Load(s.job.ID)
+	if errors.Is(err, ErrNotFound) {
+		doc, _ = s.seed(h.now())
+		return doc, nil
+	}
+	return doc, err
+}
+
+// exportRev reads edit_rev from a JSON body or a form field (the SPA
+// submits a form so the browser downloads the zip natively).
+func exportRev(r *http.Request) (int, error) {
+	ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	switch ct {
+	case "application/json":
+		var body struct {
+			EditRev int `json:"edit_rev"`
+		}
+		if err := respond.DecodeJSON(r, &body); err != nil {
+			return 0, err
+		}
+		if body.EditRev < 0 {
+			return 0, respond.E(http.StatusBadRequest, "invalid_json", "edit_rev must be a non-negative integer")
+		}
+		return body.EditRev, nil
+	default:
+		r.Body = http.MaxBytesReader(nil, r.Body, 1<<16)
+		if err := r.ParseForm(); err != nil {
+			return 0, respond.E(http.StatusBadRequest, "invalid_form", "malformed form body")
+		}
+		v := r.PostForm.Get("edit_rev")
+		if v == "" {
+			return 0, respond.E(http.StatusBadRequest, "invalid_form", "edit_rev is required")
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return 0, respond.E(http.StatusBadRequest, "invalid_form", "edit_rev must be a non-negative integer")
+		}
+		return n, nil
+	}
+}
+
+func (h *Handlers) export(w http.ResponseWriter, r *http.Request) {
+	s, ok := h.load(w, r)
+	if !ok {
+		return
+	}
+	rev, err := exportRev(r)
+	if err != nil {
+		respond.Fail(w, err)
+		return
+	}
+	doc, err := h.current(s)
+	if err != nil {
+		respond.Fail(w, err)
+		return
+	}
+	if rev != doc.EditRev {
+		respond.JSON(w, http.StatusConflict, map[string]any{
+			"code":     "edit_conflict",
+			"message":  "the edit revision changed since this page loaded; reload to export the current one",
+			"edit_rev": doc.EditRev,
+		})
+		return
+	}
+	drumsPath, err := h.layout.StemPath(s.job.ID, "drums")
+	if err != nil {
+		respond.Fail(w, err)
+		return
+	}
+	if _, err := os.Stat(drumsPath); err != nil {
+		respond.Failf(w, http.StatusNotFound, "stem_not_found", "the drum stem is missing")
+		return
+	}
+	mixPath, err := h.store.RenderNoDrums(r.Context(), s.job)
+	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		respond.Fail(w, err)
+		return
+	}
+	var bpm float64
+	if s.job.DetectedBPM != nil {
+		bpm = *s.job.DetectedBPM
+	}
+	// The mapping the document was edited against; the default when a
+	// saved document names a profile this build does not know.
+	profile := s.profile
+	if p, ok := ProfileByID(doc.Profile); ok {
+		profile = p
+	}
+	e := &Export{
+		ProjectName: s.job.ProjectName, Duration: s.duration, BPM: bpm, Grid: s.gridMap, Sections: s.sections,
+		Profile: profile, Events: doc.Events, DrumsPath: drumsPath, MixPath: mixPath, Version: h.Version,
+	}
+	// Render the small parts first so a bad event still yields a JSON error.
+	if _, err := e.MIDI(); err != nil {
+		respond.Fail(w, err)
+		return
+	}
+	name := ZipName(stems.SafeName(s.job.ProjectName), doc.EditRev)
+	hdr := w.Header()
+	hdr.Set("Content-Type", "application/zip")
+	hdr.Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	hdr.Set("Cache-Control", "private, no-store")
+	if err := e.WriteZip(w); err != nil {
+		// Headers are out. Aborting the handler makes the server cut the
+		// connection without the chunked terminator, so the client sees a
+		// broken transfer instead of saving a truncated zip as a download.
+		slog.Warn("drums export aborted", "job", s.job.ID, "rev", doc.EditRev, "err", err)
+		panic(http.ErrAbortHandler)
+	}
+	if err := h.store.MarkExported(s.job.ID, func() (Doc, error) { d, _ := s.seed(h.now()); return d, nil }, doc.EditRev); err != nil {
+		slog.Warn("drums export: mark exported", "job", s.job.ID, "err", err)
+	}
 }

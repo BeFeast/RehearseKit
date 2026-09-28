@@ -42,6 +42,8 @@ type Stem struct {
 	Path string // local WAV file to copy into the archive
 	// Duration in seconds; when 0 Project.DurationSeconds is used.
 	Duration float64
+	// Label overrides the track and clip name (default TrackName(Name)).
+	Label string
 }
 
 // Marker is a named position in beats.
@@ -363,8 +365,12 @@ func ProjectXML(p Project) ([]byte, error) {
 	for _, st := range p.Stems {
 		trackID := "track-" + st.Name
 		chID := "channel-" + st.Name
+		label := st.Label
+		if label == "" {
+			label = TrackName(st.Name)
+		}
 		doc.Structure.Tracks = append(doc.Structure.Tracks, xmlTrack{
-			ContentType: "audio", Loaded: true, ID: trackID, Name: TrackName(st.Name), Color: stemColors[st.Name],
+			ContentType: "audio", Loaded: true, ID: trackID, Name: label, Color: stemColors[st.Name],
 			Channel: channel(chID, masterChannel, p.Channels),
 		})
 		dur := st.Duration
@@ -383,7 +389,7 @@ func ProjectXML(p Project) ([]byte, error) {
 		doc.Arrangement.Lanes.Lanes = append(doc.Arrangement.Lanes.Lanes, xmlLanes{
 			Track: trackID, ID: "lanes-" + st.Name,
 			Clips: &xmlClips{ID: "clips-" + st.Name, Clips: []xmlClip{{
-				Time: f6(start), Duration: f6(beats), PlayStart: f6(0), Name: TrackName(st.Name),
+				Time: f6(start), Duration: f6(beats), PlayStart: f6(0), Name: label,
 				Warps: &xmlWarps{
 					ContentTimeUnit: "seconds", TimeUnit: "beats",
 					Audio: xmlAudio{Algorithm: "stretch", Channels: p.Channels, Duration: f6(dur), SampleRate: p.SampleRate,

@@ -139,8 +139,10 @@ func (s *Store) Save(jobID string, seed func() (Doc, error), baseRev int, events
 }
 
 // MarkExported records that an export was built from rev. A revision that
-// is no longer current is not marked (the export was refused anyway).
-func (s *Store) MarkExported(jobID string, rev int) error {
+// is no longer current is not marked (the export was refused anyway). When
+// nothing was saved yet the seed (rev 0) is written with the mark, so the
+// document on disk says what was exported.
+func (s *Store) MarkExported(jobID string, seed func() (Doc, error), rev int) error {
 	path, err := s.layout.EditsPath(jobID, "drums")
 	if err != nil {
 		return err
@@ -148,16 +150,15 @@ func (s *Store) MarkExported(jobID string, rev int) error {
 	defer s.lock(jobID)()
 	cur, err := read(path)
 	if errors.Is(err, ErrNotFound) {
-		// Nothing saved: rev 0 was exported; nothing to record on disk.
-		return nil
+		cur, err = seed()
 	}
 	if err != nil {
 		return err
 	}
-	if cur.EditRev != rev || cur.ExportedRev == rev {
+	if cur.EditRev != rev || (cur.ExportedRev != nil && *cur.ExportedRev == rev) {
 		return nil
 	}
-	cur.ExportedRev = rev
+	cur.ExportedRev = &rev
 	return write(path, cur)
 }
 

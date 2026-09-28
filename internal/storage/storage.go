@@ -8,6 +8,7 @@
 //	jobs/<job_id>/notes/<name>.json   transcription: note events of one stem, seconds (runner)
 //	jobs/<job_id>/midi/<name>.mid     transcription: SMF written by the worker from notes + grid
 //	jobs/<job_id>/edits/<name>.json   drum editor: the owner's edit revision of one stem's notes (server-side, never in the package)
+//	jobs/<job_id>/mixes/<name>.wav    drum editor: cached renders for the export (nodrums = every stem but drums, 32-bit float)
 //	jobs/<job_id>/project.dawproject
 //	jobs/<job_id>/tempo.json
 //	jobs/<job_id>/package.zip
@@ -116,6 +117,18 @@ func (l Layout) EditsPath(id, name string) (string, error) {
 		return "", fmt.Errorf("storage: invalid stem name %q", name)
 	}
 	return filepath.Join(dir, "edits", name+".json"), nil
+}
+
+// MixPath returns jobs/<id>/mixes/<name>.wav (a cached render).
+func (l Layout) MixPath(id, name string) (string, error) {
+	dir, err := l.JobDir(id)
+	if err != nil {
+		return "", err
+	}
+	if !NamePattern.MatchString(name) {
+		return "", fmt.Errorf("storage: invalid mix name %q", name)
+	}
+	return filepath.Join(dir, "mixes", name+".wav"), nil
 }
 
 // PeaksPath returns jobs/<id>/peaks/<name>.pk.

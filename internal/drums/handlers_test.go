@@ -1,6 +1,7 @@
 package drums_test
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,7 +21,9 @@ import (
 	"github.com/BeFeast/RehearseKit/internal/db/dbtest"
 	"github.com/BeFeast/RehearseKit/internal/drums"
 	"github.com/BeFeast/RehearseKit/internal/jobs"
+	"github.com/BeFeast/RehearseKit/internal/pipeline/wavtest"
 	"github.com/BeFeast/RehearseKit/internal/storage"
+	"gitlab.com/gomidi/midi/v2/smf"
 )
 
 func TestMain(m *testing.M) {
@@ -45,7 +49,7 @@ func analysisJSON() string {
 		}
 	}
 	return `{"version":1,"grid":{"beats":[` + strings.Join(beats, ",") + `],"downbeats":[` + strings.Join(downs, ",") + `],"source":"beat_this"},` +
-		`"sections":null,"instruments":{"drums":{"status":"ok","adapter":"adtof","model":"adtof_frame_rnn","notes":5},"bass":{"status":"failed","reason":"adapter timed out","notes":0}}}`
+		`"sections":[{"start":0.5,"end":8.5,"label":"Intro"},{"start":8.5,"end":16.5,"label":"Verse"}],"instruments":{"drums":{"status":"ok","adapter":"adtof","model":"adtof_frame_rnn","notes":5},"bass":{"status":"failed","reason":"adapter timed out","notes":0}}}`
 }
 
 func newEnv(t *testing.T) (*httptest.Server, storage.Layout, *jobs.Store) {
@@ -314,5 +318,232 @@ func TestEditsNotTranscribed(t *testing.T) {
 	_ = json.Unmarshal(body, &res)
 	if st != 200 || res.Grid != nil || res.GridError != "too few beats" || len(res.Doc.Events) != 5 {
 		t.Fatalf("no grid: %d %+v", st, res)
+	}
+}
+
+func TestExportRoute(t *testing.T) {
+	ts, layout, store := newEnv(t)
+	id, token := createJob(t, store, true)
+	complete(t, store, id, 2.5)
+	writeArtefacts(t, layout, id)
+	dir, _ := layout.JobDir(id)
+	_ = os.MkdirAll(filepath.Join(dir, "stems"), 0o755)
+	ctx := context.Background()
+	for _, name := range []string{"vocals", "drums", "bass", "other", "guitar", "piano"} {
+		p := filepath.Join(dir, "stems", name+".wav")
+		frames, err := wavtest.Write(p, wavtest.Options{Seconds: 0.5, Frequency: 100 + float64(len(name))*50})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.UpsertStem(ctx, id, jobs.Stem{Name: name, Frames: frames, SampleRate: 48000, BitDepth: 24, Channels: 2}, "stems/"+name+".wav", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := "/api/v1/jobs/" + id + "/drums/export"
+
+	// Stale revision → 409 with the current one (the seed is rev 0).
+	if st, body := call(t, ts, "POST", base, token, map[string]any{"edit_rev": 3}); st != 409 || code(body) != "edit_conflict" || !strings.Contains(string(body), `"edit_rev":0`) {
+		t.Fatalf("stale: %d %s", st, body)
+	}
+	// Without the token → 403 like the edits.
+	if st, _ := call(t, ts, "POST", base, "", map[string]any{"edit_rev": 0}); st != 403 {
+		t.Fatalf("no token: %d", st)
+	}
+	// Bad bodies.
+	if st, _ := call(t, ts, "POST", base, token, map[string]any{"edit_rev": 0, "x": 1}); st != 400 {
+		t.Fatalf("unknown field: %d", st)
+	}
+	if st, body := call(t, ts, "POST", base, token, map[string]any{"edit_rev": -1}); st != 400 || code(body) != "invalid_json" {
+		t.Fatalf("negative rev: %d %s", st, body)
+	}
+	// Stale revision through the form path.
+	req0, _ := http.NewRequest("POST", ts.URL+base, strings.NewReader("edit_rev=7"))
+	req0.Header.Set(jobs.ClaimTokenHeader, token)
+	req0.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp0, err := http.DefaultClient.Do(req0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b0, _ := io.ReadAll(resp0.Body)
+	resp0.Body.Close()
+	if resp0.StatusCode != 409 || code(b0) != "edit_conflict" {
+		t.Fatalf("form stale: %d %s", resp0.StatusCode, b0)
+	}
+	req, _ := http.NewRequest("POST", ts.URL+base, strings.NewReader("edit_rev=abc"))
+	req.Header.Set(jobs.ClaimTokenHeader, token)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("form abc: %d", resp.StatusCode)
+	}
+
+	// Export the seed as a form post (the SPA's native download).
+	req, _ = http.NewRequest("POST", ts.URL+base, strings.NewReader("edit_rev=0"))
+	req.Header.Set(jobs.ClaimTokenHeader, token)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/zip" || resp.Header.Get("Content-Disposition") != `attachment; filename="Song-drums-r0.zip"` {
+		t.Fatalf("export: %d %s %s", resp.StatusCode, resp.Header, body[:min(len(body), 200)])
+	}
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(zr.File) != 2 || zr.File[0].Name != "drums.mid" || zr.File[1].Name != "drums.dawproject" {
+		t.Fatalf("entries %v", zr.File)
+	}
+	mixPath, _ := layout.MixPath(id, "nodrums")
+	st1, err := os.Stat(mixPath)
+	if err != nil {
+		t.Fatalf("mix not cached: %v", err)
+	}
+	// Exporting the seed records it: the document is written as rev 0 with exported_rev 0.
+	st0, body0 := call(t, ts, "GET", "/api/v1/jobs/"+id+"/drums/edits", token, nil)
+	var res0 drums.EditsResponse
+	_ = json.Unmarshal(body0, &res0)
+	if st0 != 200 || res0.Doc.EditRev != 0 || res0.Doc.ExportedRev == nil || *res0.Doc.ExportedRev != 0 {
+		t.Fatalf("seed export mark: %d %+v", st0, res0.Doc)
+	}
+	// The route's archive: markers from the sections, and project.xml valid against the XSD.
+	var proj0 string
+	{
+		rc, _ := zr.File[1].Open()
+		inner, _ := io.ReadAll(rc)
+		rc.Close()
+		ir, err := zip.NewReader(bytes.NewReader(inner), int64(len(inner)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range ir.File {
+			if f.Name == "project.xml" {
+				rc, _ := f.Open()
+				b, _ := io.ReadAll(rc)
+				rc.Close()
+				proj0 = string(b)
+			}
+		}
+	}
+	if !strings.Contains(proj0, `<Marker time="`) || !strings.Contains(proj0, `name="Intro"`) || !strings.Contains(proj0, `name="Verse"`) {
+		t.Errorf("markers missing: %s", proj0[:min(len(proj0), 800)])
+	}
+	xsdCheck(t, []byte(proj0))
+
+	// Save a revision, export it as JSON; exported_rev follows, the mix is reused.
+	st, body2 := call(t, ts, "GET", "/api/v1/jobs/"+id+"/drums/edits", token, nil)
+	var res drums.EditsResponse
+	_ = json.Unmarshal(body2, &res)
+	evs := append(res.Doc.Events, drums.Event{ID: "u1", Art: "hho", T: 0.3, Vel: 0.5, Src: "manual"})
+	if st, body := call(t, ts, "PUT", "/api/v1/jobs/"+id+"/drums/edits", token, map[string]any{"base_rev": 0, "events": evs}); st != 200 {
+		t.Fatalf("put: %d %s", st, body)
+	}
+	st, body = call(t, ts, "POST", base, token, map[string]any{"edit_rev": 1})
+	if st != 200 {
+		t.Fatalf("export rev 1: %d %s", st, body)
+	}
+	zr, _ = zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	rc, _ := zr.File[1].Open()
+	inner, _ := io.ReadAll(rc)
+	rc.Close()
+	ir, err := zip.NewReader(bytes.NewReader(inner), int64(len(inner)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proj string
+	for _, f := range ir.File {
+		if f.Name == "project.xml" {
+			rc, _ := f.Open()
+			b, _ := io.ReadAll(rc)
+			rc.Close()
+			proj = string(b)
+		}
+	}
+	if !strings.Contains(proj, `key="46"`) || !strings.Contains(proj, `name="Mix (no drums)"`) {
+		t.Errorf("project.xml of rev 1: %s", proj)
+	}
+	st2, _ := os.Stat(mixPath)
+	if !st1.ModTime().Equal(st2.ModTime()) {
+		t.Error("mix re-rendered on the second export")
+	}
+	st, body2 = call(t, ts, "GET", "/api/v1/jobs/"+id+"/drums/edits", token, nil)
+	_ = json.Unmarshal(body2, &res)
+	if st != 200 || res.Doc.ExportedRev == nil || *res.Doc.ExportedRev != 1 || res.Doc.EditRev != 1 {
+		t.Fatalf("exported_rev: %+v", res.Doc)
+	}
+	// Removing the job takes the cache with it.
+	_ = layout.RemoveJob(id)
+	if _, err := os.Stat(mixPath); err == nil {
+		t.Error("mix survived RemoveJob")
+	}
+}
+
+// TestExportRouteWithoutGrid: a job with no usable grid and no detected
+// tempo exports a valid SMF at the default tempo.
+func TestExportRouteWithoutGrid(t *testing.T) {
+	ts, layout, store := newEnv(t)
+	id, token := createJob(t, store, true)
+	complete(t, store, id, 2.5)
+	writeArtefacts(t, layout, id)
+	ap, _ := layout.AnalysisPath(id)
+	_ = os.WriteFile(ap, []byte(`{"version":1,"grid":null,"grid_error":"too few beats","sections":null,"instruments":{"drums":{"status":"ok","adapter":"adtof","notes":5}}}`), 0o644)
+	dir, _ := layout.JobDir(id)
+	_ = os.MkdirAll(filepath.Join(dir, "stems"), 0o755)
+	for _, name := range []string{"vocals", "drums", "bass", "other"} {
+		frames, err := wavtest.Write(filepath.Join(dir, "stems", name+".wav"), wavtest.Options{Seconds: 0.5})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.UpsertStem(context.Background(), id, jobs.Stem{Name: name, Frames: frames, SampleRate: 48000, BitDepth: 24, Channels: 2}, "stems/"+name+".wav", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, body := call(t, ts, "POST", "/api/v1/jobs/"+id+"/drums/export", token, map[string]any{"edit_rev": 0})
+	if st != 200 {
+		t.Fatalf("export: %d %s", st, body)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc, _ := zr.File[0].Open()
+	mid, _ := io.ReadAll(rc)
+	rc.Close()
+	f, err := smf.ReadFrom(bytes.NewReader(mid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bpm float64
+	for _, ev := range f.Tracks[0] {
+		ev.Message.GetMetaTempo(&bpm)
+	}
+	if bpm < 119.99 || bpm > 120.01 {
+		t.Fatalf("tempo %v", bpm)
+	}
+}
+
+// xsdCheck validates project.xml against the DAWproject schema when
+// xmllint is installed.
+func xsdCheck(t *testing.T, projectXML []byte) {
+	t.Helper()
+	xmllint, err := exec.LookPath("xmllint")
+	if err != nil {
+		t.Skip("xmllint not installed")
+	}
+	path := filepath.Join(t.TempDir(), "project.xml")
+	if err := os.WriteFile(path, projectXML, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	xsd, _ := filepath.Abs(filepath.Join("..", "pipeline", "dawproject", "testdata", "Project.xsd"))
+	out, err := exec.Command(xmllint, "--noout", "--schema", xsd, path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("xmllint: %v\n%s", err, out)
 	}
 }
