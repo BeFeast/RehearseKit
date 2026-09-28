@@ -1,6 +1,7 @@
 import { ApiError, API_BASE, request } from './client';
 import type { Job, JobListStatus, MixPayload, Page, PublicConfig, Quality, User, YouTubePreview } from './types';
 import type { MixState } from '../lib/mix-state';
+import { EditConflict, type AnalysisSummary, type DrumEditsResponse, type DrumEvent, type DrumSaveResponse } from '../lib/drums/types';
 
 export type { MixPayload };
 
@@ -162,6 +163,27 @@ export async function putMix(id: string, state: MixState): Promise<void> {
     throw err;
   }
 }
+
+// ---- transcription artefacts + drum editor (S2) ------------------------
+
+export const getAnalysis = (id: string) => request<AnalysisSummary>(`/jobs/${id}/analysis`, { jobId: id });
+
+export const getDrumEdits = (id: string) => request<DrumEditsResponse>(`/jobs/${id}/drums/edits`, { jobId: id });
+
+/** PUT the whole event list against base_rev; 409 becomes EditConflict. */
+export async function putDrumEdits(id: string, baseRev: number, events: DrumEvent[]): Promise<DrumSaveResponse> {
+  try {
+    return await request<DrumSaveResponse>(`/jobs/${id}/drums/edits`, { method: 'PUT', body: { base_rev: baseRev, events }, jobId: id });
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 409 && err.code === 'edit_conflict') {
+      const rev = (err.body as { edit_rev?: number } | null)?.edit_rev;
+      throw new EditConflict(typeof rev === 'number' ? rev : baseRev + 1);
+    }
+    throw err;
+  }
+}
+
+export const drumExportUrl = (id: string) => `${API_BASE}/jobs/${id}/drums/export`;
 
 // ---- youtube -------------------------------------------------------------
 
