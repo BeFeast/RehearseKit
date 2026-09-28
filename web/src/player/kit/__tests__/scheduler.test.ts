@@ -26,8 +26,7 @@ function fakeHost() {
   const played: Played[] = [];
   const host: SchedulerHost = {
     sampleRate: SR,
-    clock: (): ClockSnapshot | null =>
-      playing && plan ? { readPos: streamAtCtx, clockFrame: ctxFrame, ctxTime: ctxFrame / SR, ctxFrame, generation, underruns } : null,
+    clock: (): ClockSnapshot | null => (playing && plan ? { streamNow: streamAtCtx, ctxTime: ctxFrame / SR, generation, underruns } : null),
     plan: () => (playing ? plan : null),
     play: (art, vel, when) => {
       const p: Played = { art, vel, when, stopped: null };
@@ -137,21 +136,63 @@ describe('KitScheduler', () => {
     expect(f.played.slice(1).map((p) => p.art)).toEqual(['kick', 'snare']);
   });
 
-  it('row mutes skip hits; a stall cancels and requeues; stop cancels everything', () => {
+  it('row mutes skip hits; a stall cancels and waits, then plays each hit once; stop cancels everything', () => {
     const f = fakeHost();
     const s = new KitScheduler(f.host, { lookaheadSeconds: 0.12 });
-    s.setHits([hit('a', 'kick', 1.0), hit('b', 'snare', 1.05)], (art) => art === 'snare');
+    s.setHits([hit('a', 'kick', 1.0), hit('b', 'snare', 1.05), hit('c', 'kick', 1.06)], (art) => art === 'snare');
     f.start(0.95, 10, null);
     s.tick();
-    expect(f.played.map((p) => p.art)).toEqual(['kick']);
-    f.advance(0.01, true); // underrun: audio clock moved, stream did not
+    expect(f.played.map((p) => p.art)).toEqual(['kick', 'kick']);
+    // A 0.3 s stall: the audio clock runs, the stream does not.
+    for (let i = 0; i < 12; i++) {
+      f.advance(0.025, true);
+      s.tick();
+    }
+    expect(f.played.every((p) => p.stopped !== null)).toBe(true);
+    expect(f.played.length).toBe(2); // nothing queued while stalled
+    // The stream moves again: both kicks are queued once, at their stream positions.
+    f.advance(0.025);
     s.tick();
-    expect(f.played[0].stopped).not.toBeNull();
-    expect(f.played.length).toBe(2);
+    f.advance(0.025);
+    s.tick();
+    const live = f.played.filter((p) => p.stopped === null);
+    expect(live.map((p) => p.art)).toEqual(['kick', 'kick']);
+    expect(f.played.length).toBe(4);
     f.stop();
     s.tick();
-    expect(f.played[1].stopped).not.toBeNull();
+    expect(f.played.every((p) => p.stopped !== null)).toBe(true);
     expect(s.pending).toBe(0);
+  });
+
+  it('a seek stops a crash that is still ringing', () => {
+    const f = fakeHost();
+    const s = new KitScheduler(f.host, { lookaheadSeconds: 0.12 });
+    s.setHits([hit('x', 'crash', 1.0)], () => false);
+    f.start(0.95, 10, null);
+    s.tick();
+    f.advance(0.5); // the crash sounded 0.45 s ago and rings on
+    s.tick();
+    expect(f.played[0].stopped).toBeNull();
+    f.start(5, 10, null);
+    s.tick();
+    expect(f.played[0].stopped).not.toBeNull();
+  });
+
+  it('an edit during playback loses no hit between the edit and the next tick', () => {
+    const f = fakeHost();
+    const s = new KitScheduler(f.host, { lookaheadSeconds: 0.12 });
+    const hits = [hit('a', 'kick', 1.0), hit('b', 'kick', 1.1), hit('c', 'kick', 1.2)];
+    s.setHits(hits, () => false);
+    f.start(0.95, 10, null);
+    s.tick();
+    f.advance(0.1);
+    s.tick();
+    f.advance(0.02); // now 1.07: 'b' at 1.1 is queued and has not sounded
+    s.setHits([...hits, hit('u1', 'snare', 1.3)], () => false); // edit: cancels unsounded, cursor = now
+    f.advance(0.02);
+    s.tick();
+    const live = f.played.filter((p) => p.stopped === null).map((p) => p.art);
+    expect(live).toEqual(['kick', 'kick', 'kick']); // a (sounded), b re-queued, c
   });
 
   it('a closed or pedal hat chokes the open hat that is still ringing', () => {

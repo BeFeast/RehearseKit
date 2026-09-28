@@ -5,10 +5,9 @@ import { CHOKES, layerFor, velocityGain, type LoadedKit } from './kit';
 
 /** What the scheduler needs from the engine each tick (see StreamEngine.clock()). */
 export interface ClockSnapshot {
-  readPos: number;
-  clockFrame: number;
+  /** The stream frame reaching the output at ctxTime. */
+  streamNow: number;
   ctxTime: number;
-  ctxFrame: number;
   generation: number;
   underruns: number;
 }
@@ -84,12 +83,20 @@ export class KitScheduler {
     this.reschedule();
   }
 
-  /** Cancel everything not yet sounding and rescan from the clock on the next tick. */
+  /**
+   * Cancel everything not yet sounding and rescan from the clock: the
+   * cursor goes back to the stream frame sounding now, so no hit between
+   * this call and the next tick is lost.
+   */
   reschedule(): void {
     const c = this.host.clock();
-    const now = c ? c.ctxTime : 0;
-    this.cancelFrom(now);
-    this.cursor = -1;
+    if (!c) {
+      this.cancelFrom(0);
+      this.cursor = -1;
+      return;
+    }
+    this.cancelFrom(c.ctxTime);
+    this.cursor = c.generation === this.generation ? c.streamNow : -1;
   }
 
   /** Cancel every queued voice (stop, seek, mode off). */
@@ -118,19 +125,23 @@ export class KitScheduler {
     }
     const sr = this.host.sampleRate;
     if (c.generation !== this.generation) {
+      // Seek, loop change, play: everything queued or ringing belongs to the old stream.
       this.cancelFrom(-Infinity);
       this.generation = c.generation;
       this.cursor = -1;
-      this.lastOpenHat = null;
+      this.lastUnderruns = c.underruns;
     }
+    const nowStream = c.streamNow;
     if (c.underruns !== this.lastUnderruns) {
-      // The stream stalled: whatever was queued against the old mapping is early now.
+      // The stream is stalling: queued hits would sound ahead of the silent
+      // stems. Drop what has not sounded and wait for the stream to move;
+      // the clock offset follows the stall, so resuming from the frame
+      // sounding now neither repeats nor skips a hit.
       this.lastUnderruns = c.underruns;
       this.cancelFrom(c.ctxTime);
-      this.cursor = -1;
+      this.cursor = nowStream;
+      return;
     }
-    // Audio frame → stream frame, through the last published pair.
-    const nowStream = c.readPos + (((c.ctxFrame - c.clockFrame) << 0) | 0);
     // A late tick resumes from as far back as the tolerance allows: those
     // hits play immediately instead of being skipped.
     const floor = nowStream - Math.round(this.late * sr);
@@ -152,9 +163,6 @@ export class KitScheduler {
       pos = chunk.streamStart + chunk.frames;
     }
     this.cursor = horizon;
-    // Drop finished voices from the queue.
-    const cutoff = c.ctxTime - 0.05;
-    if (this.queued.length && this.queued[0].when < cutoff) this.queued = this.queued.filter((q) => q.when >= cutoff);
   }
 
   /** Hits between two stream frames (for the skipped counter). */
@@ -189,9 +197,12 @@ export class KitScheduler {
       if (this.recent.length > 96) this.recent.splice(0, this.recent.length - 96);
       const entry = { voice, when, art: h.art };
       this.queued.push(entry);
+      // A voice stays cancellable until it has finished ringing (a crash tail
+      // must stop on a seek like a hit that has not sounded yet).
       voice.onended = () => {
         const k = this.queued.indexOf(entry);
         if (k >= 0) this.queued.splice(k, 1);
+        if (this.lastOpenHat?.voice === voice) this.lastOpenHat = null;
       };
       // Choke: a closed or pedal hat ends the open hat that is still ringing.
       const chokes = CHOKES[h.art];

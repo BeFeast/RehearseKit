@@ -21,7 +21,7 @@ through the exported `drums.mid` / `drums.dawproject`.
 ```
 web/public/kit/kit.json        manifest: articulation → velocity layers (file, vel range, gain)
 web/public/kit/<art>-<n>.flac  48 kHz FLAC, trimmed and faded, n = 1 (soft) … 3 (hard)
-web/scripts/build-kit.sh       re-runnable: downloads the chosen source WAVs by URL and rebuilds out/ with ffmpeg
+web/scripts/build-kit.sh       re-runnable: downloads the chosen source FLACs by URL (to $KIT_SRC, default /tmp/rk-kit-src) and rebuilds web/public/kit with ffmpeg
 ```
 
 `kit.json` keys are the editor's articulations (`kick`, `snare`, `stick`,
@@ -36,23 +36,26 @@ tile 1..127 without gaps. Total size is kept under 4 MB (3,120,535 bytes for 36 
   velocity and shades the gain inside the layer (0.55 … 1.0 × layer gain).
 - `scheduler.ts` — `KitScheduler` queues hits ahead of the audio clock.
   The engine streams a linear sequence of frames (a prefix, then the loop
-  region repeated); the AudioWorklet publishes the pair (stream frame
-  `READ_POS`, audio frame `CLOCK_FRAME`) every quantum, so a hit at song
-  second *t* maps to one stream frame per pass and is queued exactly once
-  per pass — a loop wrap cannot double-trigger it, and nothing is timed
-  from the UI clock. Every seek/replan bumps the engine's stream
-  generation: queued voices are cancelled and the cursor restarts at the
-  clock; edits, row mutes and mode changes cancel what has not sounded yet
-  and rescan; an underrun (the stream stalled while the audio clock ran)
-  does the same. A closed or pedal hat chokes the open hat still ringing.
-  Lookahead 120 ms, tick 25 ms, hits more than 30 ms in the past are
-  skipped.
+  region repeated); the AudioWorklet publishes one word every quantum,
+  `CLOCK_OFFSET` (stream frame *S* reaches the output at audio frame
+  *S* + offset — rewritten on stalled quanta too, so the mapping follows an
+  underrun), so a hit at song second *t* maps to one stream frame per pass
+  and is queued exactly once per pass — a loop wrap cannot double-trigger
+  it, and nothing is timed from the UI clock. Every seek/replan bumps the
+  engine's stream generation: queued and ringing voices are cancelled and
+  the cursor restarts at the clock; edits, row mutes and mode changes
+  cancel what has not sounded yet and rescan from the frame sounding now;
+  while the stream stalls nothing is queued. A closed or pedal hat chokes
+  the open hat still ringing. Lookahead 350 ms (the main thread can be
+  busy), tick 25 ms, a hit up to 80 ms late is played at once, later ones
+  are skipped and counted.
 - `use-kit-audition.ts` — while the editor is in MIDI KIT mode the drum
   stem is force-muted in the engine (a layer over the mixer's mute, mix
   state untouched); the kit bus follows the DRUMS strip (fader, mute,
   solo) and joins the master after the stem faders (`StreamEngine.auxInput`).
-  The inspector's AUDITION plays the selected hits (≤ 12) immediately,
-  keeping their relative timing.
+  The inspector's AUDITION (MIDI KIT mode) plays the selected hits (≤ 12)
+  immediately, keeping their relative timing, through the engine's direct
+  output — at the master and DRUMS strip level, transport stopped or not.
 
 ORIGINAL mode plays the drum stem as the mixer has it; SPLIT (per-instrument
 sub-stems) is not part of this slice.

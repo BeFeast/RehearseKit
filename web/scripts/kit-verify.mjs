@@ -189,7 +189,7 @@ try {
   const loopEnd = await sample('midi-loop-6s');
   const recent = await evaluate(`window.__rkKit.recent().slice(-40).map((r) => [r.art, +r.t.toFixed(2), +(r.when - r.now).toFixed(3), r.sf])`);
   console.log(ts(), 'recent', JSON.stringify(recent));
-  const passes = (loopEnd.clock.readPos - loopStart.clock.readPos) / (2 * 48000);
+  const passes = (loopEnd.clock.streamNow - loopStart.clock.streamNow) / (2 * 48000);
   const perPass = (loopEnd.played - loopStart.played) / passes;
   // Back to ORIGINAL: kit gone, stem unmuted.
   await evaluate(`window.__rkDrums.handle.setMode('original')`);

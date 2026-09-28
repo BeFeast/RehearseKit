@@ -155,32 +155,33 @@ describe('lab-stream-processor', () => {
   });
 });
 
-describe('audio clock pair', () => {
-  it('publishes the audio frame at which READ_POS reaches the output', () => {
+describe('audio clock offset', () => {
+  it('maps stream frames to audio frames, follows a stall, and is invalid after a flush', () => {
     const { proc, rings, outputs } = setup([2]);
+    expect(rings.clockOffset()).toBeNull();
     (globalThis as any).currentFrame = 4096;
     rings.write(0, [ramp(QUANTUM), ramp(QUANTUM)], QUANTUM);
     rings.write(0, [ramp(QUANTUM), ramp(QUANTUM)], QUANTUM);
     rings.setState(STATE.PLAYING);
     proc.process([], outputs);
-    expect(rings.clock()).toEqual({ readPos: QUANTUM, clockFrame: 4096 + QUANTUM });
+    // Stream frame 0 was output at audio frame 4096.
+    expect(rings.clockOffset()).toBe(4096);
     (globalThis as any).currentFrame = 4096 + QUANTUM;
     proc.process([], outputs);
-    expect(rings.clock()).toEqual({ readPos: 2 * QUANTUM, clockFrame: 4096 + 2 * QUANTUM });
-    // An underrun leaves the pair untouched.
+    expect(rings.clockOffset()).toBe(4096);
+    // Underrun: frame 256 now reaches the output one quantum later at the earliest.
     (globalThis as any).currentFrame = 4096 + 2 * QUANTUM;
     proc.process([], outputs);
     expect(rings.underruns()).toBe(1);
-    expect(rings.clock()).toEqual({ readPos: 2 * QUANTUM, clockFrame: 4096 + 2 * QUANTUM });
-    // A flush invalidates the pair until the next consumed quantum.
+    expect(rings.clockOffset()).toBe(4096 + QUANTUM);
+    // A flush invalidates the mapping until the next quantum.
     proc.port.onmessage!({ data: { type: 'flush', generation: 7 } });
-    expect(rings.clock()).toBeNull();
-    expect(rings.readPos()).toBe(0);
+    expect(rings.clockOffset()).toBeNull();
     rings.resetWriters();
     rings.write(0, [ramp(QUANTUM), ramp(QUANTUM)], QUANTUM);
     (globalThis as any).currentFrame = 9000;
     proc.process([], outputs);
-    expect(rings.clock()).toEqual({ readPos: QUANTUM, clockFrame: 9000 + QUANTUM });
+    expect(rings.clockOffset()).toBe(9000);
     delete (globalThis as any).currentFrame;
   });
 });

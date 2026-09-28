@@ -38,13 +38,12 @@ export function useKitAudition(m: Mixer, ed: DrumEditorHandle, active: boolean):
   const loadingRef = useRef<Promise<void> | null>(null);
   const schedRef = useRef<KitScheduler | null>(null);
   const busRef = useRef<GainNode | null>(null);
-  const playRef = useRef<SchedulerHost['play'] | null>(null);
   const drumsIndex = m.stems.indexOf('drums');
   const midiMode = active && ed.mode === 'midi';
   const engineState = m.engineState;
-  // The engine instance is created on the first Play and then stays; the
-  // scheduler is tied to that instance, not to its playing state.
-  const hasEngine = m.engine() !== null;
+  // The scheduler is tied to the engine instance (created on the first
+  // Play, replaced when the page moves to another job), not to its state.
+  const engine = m.engine();
   const hitsRef = useRef(ed.state.hits);
   hitsRef.current = ed.state.hits;
   const mutedRef = useRef(ed.isRowMuted);
@@ -96,7 +95,6 @@ export function useKitAudition(m: Mixer, ed: DrumEditorHandle, active: boolean):
       else stats.missing++;
       return v;
     };
-    playRef.current = play;
     const host: SchedulerHost = {
       sampleRate: ctx.sampleRate,
       clock: () => e.clock(),
@@ -120,12 +118,11 @@ export function useKitAudition(m: Mixer, ed: DrumEditorHandle, active: boolean):
       clearInterval(timer);
       sched.stopAll();
       schedRef.current = null;
-      playRef.current = null;
       busRef.current = null;
       bus.disconnect();
       delete (window as unknown as { __rkKit?: typeof dbg }).__rkKit;
     };
-  }, [midiMode, status, hasEngine]);
+  }, [midiMode, status, engine]);
 
   // Hits and row mutes: reschedule on change.
   useEffect(() => {
@@ -148,15 +145,26 @@ export function useKitAudition(m: Mixer, ed: DrumEditorHandle, active: boolean):
     (window as unknown as { __rkKitStatus?: { status: string; error: string | null } }).__rkKitStatus = { status, error };
   }, [status, error]);
 
+  // AUDITION plays at once, transport stopped or not: through the engine's
+  // direct output (master level, no transport gate) and the DRUMS strip level.
   const auditionNow = useCallback((hits: DrumEvent[]) => {
-    const ctx = mRef.current.engine()?.context;
-    const play = playRef.current;
-    if (!ctx || !play || hits.length === 0) return;
+    const e = mRef.current.engine();
+    const ctx = e?.context;
+    const out = e?.directInput;
+    const kit = kitRef.current;
+    if (!ctx || !out || !kit || hits.length === 0) return;
+    void ctx.resume();
+    const bus = ctx.createGain();
+    const s = mRef.current.mix.stems.drums;
+    bus.gain.value = !s || s.muted || isSilenced(mRef.current.mix, 'drums') ? 0 : positionToGain(s.position);
+    const play = makeKitPlayer(ctx, kit, out, bus);
     const list = hits.slice(0, MAX_AUDITION);
     const t0 = Math.min(...list.map((h) => h.t));
     const now = ctx.currentTime + 0.02;
     for (const h of list) play(h.art as Articulation, velTo127(h.vel), now + (h.t - t0));
+    setTimeout(() => bus.disconnect(), (Math.max(...list.map((h) => h.t)) - t0 + 4) * 1000);
   }, []);
 
-  return { status, error, auditionNow };
+  // The inspector's AUDITION is live only in MIDI KIT with the kit loaded.
+  return { status: midiMode ? status : 'idle', error, auditionNow };
 }

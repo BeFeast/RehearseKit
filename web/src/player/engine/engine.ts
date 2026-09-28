@@ -113,6 +113,7 @@ export class StreamEngine {
   private gains: GainNode[] = [];
   private master: GainNode | null = null;
   private aux: GainNode | null = null;
+  private direct: GainNode | null = null;
   private analysers: AnalyserNode[] = [];
   private analyserBuf: Float32Array<ArrayBuffer> | null = null;
   private masterFollow: MasterMeter = { left: zeroMeter(), right: zeroMeter() };
@@ -205,6 +206,11 @@ export class StreamEngine {
     return this.aux;
   }
 
+  /** Output for immediate auditions: follows the master level, not the transport. */
+  get directInput(): AudioNode | null {
+    return this.direct;
+  }
+
   /** The play plan the worklet is consuming (stream frame → song frame); null while stopped, priming or flushing. */
   get playPlan(): PlayPlan | null {
     return this.stateValue === 'playing' && this.pendingFlush === null ? this.plan : null;
@@ -216,25 +222,19 @@ export class StreamEngine {
   }
 
   /**
-   * Audio-clock snapshot for schedulers: the stream frame that reaches the
-   * output at audio frame `clockFrame`, plus the context time now. Null
-   * unless playing with a plan.
+   * Audio-clock snapshot for schedulers: the stream frame reaching the
+   * output at the context time now, plus the generation and underrun count.
+   * Null unless playing a settled plan (not priming, not flushing).
    */
-  clock(): { readPos: number; clockFrame: number; ctxTime: number; ctxFrame: number; generation: number; underruns: number } | null {
-    // Only while the worklet consumes the current plan: not during a
-    // flush (the plan is being replaced) nor while priming (the pair is
-    // reset), so a scheduler never maps against a dead stream.
+  clock(): { streamNow: number; ctxTime: number; generation: number; underruns: number } | null {
     if (!this.ctx || !this.rings || this.stateValue !== 'playing' || !this.plan || this.pendingFlush !== null) return null;
-    const c = this.rings.clock();
-    if (!c) return null;
-    return {
-      ...c,
-      ctxTime: this.ctx.currentTime,
-      ctxFrame: Math.round(this.ctx.currentTime * this.ctx.sampleRate) >>> 0,
-      generation: this.generation,
-      underruns: this.rings.underruns(),
-    };
+    const offset = this.rings.clockOffset();
+    if (offset === null) return null;
+    const ctxTime = this.ctx.currentTime;
+    const ctxFrame = Math.round(ctxTime * this.ctx.sampleRate) | 0;
+    return { streamNow: (ctxFrame - offset) | 0, ctxTime, generation: this.generation, underruns: this.rings.underruns() };
   }
+
 
   /** Current song position in seconds. */
   get position(): number {
@@ -296,6 +296,12 @@ export class StreamEngine {
     aux.gain.value = 1;
     aux.connect(master);
     this.aux = aux;
+    // Immediate audition (a hit played on demand, transport stopped or
+    // not): after the master level but not behind the transport gate.
+    const direct = ctx.createGain();
+    direct.gain.value = this.masterValue;
+    direct.connect(ctx.destination);
+    this.direct = direct;
     // Master L/R metering: split the summed signal and analyse each side.
     const splitter = ctx.createChannelSplitter(2);
     master.connect(splitter);
@@ -419,6 +425,7 @@ export class StreamEngine {
   /** Master bus gain (linear, 0..2). Ramps with the transport. */
   setMasterGain(value: number): void {
     this.masterValue = Math.max(0, Math.min(value, 2));
+    if (this.direct && this.ctx) this.direct.gain.setTargetAtTime(this.masterValue, this.ctx.currentTime, 0.01);
     if (this.master && this.ctx && this.stateValue === 'playing') {
       this.master.gain.setTargetAtTime(this.masterValue, this.ctx.currentTime, 0.01);
     }
