@@ -61,13 +61,20 @@ func Failf(w http.ResponseWriter, status int, code, msg string) {
 }
 
 // DecodeJSON reads a JSON request body (max 1 MiB) into v.
-func DecodeJSON(r *http.Request, v any) error {
-	body := http.MaxBytesReader(nil, r.Body, 1<<20)
+func DecodeJSON(r *http.Request, v any) error { return DecodeJSONMax(r, v, 1<<20) }
+
+// DecodeJSONMax is DecodeJSON with an explicit body limit in bytes.
+func DecodeJSONMax(r *http.Request, v any, limit int64) error {
+	body := http.MaxBytesReader(nil, r.Body, limit)
 	dec := json.NewDecoder(body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		if errors.Is(err, io.EOF) {
 			return E(http.StatusBadRequest, "invalid_json", "request body is empty")
+		}
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return E(http.StatusRequestEntityTooLarge, "body_too_large", fmt.Sprintf("request body exceeds %d bytes", tooLarge.Limit))
 		}
 		return E(http.StatusBadRequest, "invalid_json", "malformed JSON body: "+err.Error())
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/BeFeast/RehearseKit/internal/auth"
 	"github.com/BeFeast/RehearseKit/internal/auth/googleid"
 	"github.com/BeFeast/RehearseKit/internal/config"
+	"github.com/BeFeast/RehearseKit/internal/drums"
 	"github.com/BeFeast/RehearseKit/internal/gpu"
 	"github.com/BeFeast/RehearseKit/internal/jobs"
 	"github.com/BeFeast/RehearseKit/internal/signed"
@@ -80,6 +81,7 @@ func New(cfg config.Config, pool *pgxpool.Pool) (*Server, error) {
 	stemHandlers := stems.NewHandlers(jobHandlers, layout)
 	stemHandlers.Register(mux)
 	stemHandlers.RegisterDownload(mux)
+	drums.NewHandlers(jobHandlers, layout).Register(mux)
 	ytHandlers.Register(mux)
 	signer := signed.New(cfg.SigningKey)
 	signed.NewHandlers(signer, layout).Register(mux)

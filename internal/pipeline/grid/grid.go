@@ -60,9 +60,9 @@ type Bar struct {
 
 // TimeSignature is a time-signature change at a beat position.
 type TimeSignature struct {
-	Beat        float64
-	Numerator   int
-	Denominator int
+	Beat        float64 `json:"beat"`
+	Numerator   int     `json:"numerator"`
+	Denominator int     `json:"denominator"`
 }
 
 // TempoPoint is one automation point (Bitwig stepped form: two points
@@ -312,6 +312,29 @@ func (m *Map) Warps(duration float64) []Warp {
 
 // Beats returns the cleaned beat times.
 func (m *Map) Beats() []float64 { return append([]float64(nil), m.beats...) }
+
+// Export is the JSON form of a Map for clients that draw a ruler or snap
+// to the grid: everything Beat and Seconds need (the cleaned beats, the
+// beat position of beats[0], the median interval, the constant flag) plus
+// the transport tempo and the time signatures. A client that ports Beat /
+// Seconds over these fields lands on the same beats the MIDI export uses.
+type Export struct {
+	Constant       bool            `json:"constant"`
+	Offset         float64         `json:"offset"`
+	Median         float64         `json:"median"`
+	Beats          []float64       `json:"beats"`
+	BPM            float64         `json:"bpm"`
+	Numerator      int             `json:"numerator"`
+	TimeSignatures []TimeSignature `json:"time_signatures"`
+}
+
+// Export returns the JSON form of the map.
+func (m *Map) Export() Export {
+	return Export{
+		Constant: m.Constant, Offset: m.offset, Median: m.median, Beats: m.Beats(),
+		BPM: m.BPM(), Numerator: m.Numerator(), TimeSignatures: m.TimeSignatures(),
+	}
+}
 
 // Range returns the lowest and highest tempo between beats.
 func (m *Map) Range() (lo, hi float64) {

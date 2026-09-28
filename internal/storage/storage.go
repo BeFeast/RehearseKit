@@ -7,6 +7,7 @@
 //	jobs/<job_id>/analysis.json      transcription: beat grid, sections, per-instrument status (runner)
 //	jobs/<job_id>/notes/<name>.json   transcription: note events of one stem, seconds (runner)
 //	jobs/<job_id>/midi/<name>.mid     transcription: SMF written by the worker from notes + grid
+//	jobs/<job_id>/edits/<name>.json   drum editor: the owner's edit revision of one stem's notes (server-side, never in the package)
 //	jobs/<job_id>/project.dawproject
 //	jobs/<job_id>/tempo.json
 //	jobs/<job_id>/package.zip
@@ -103,6 +104,18 @@ func (l Layout) MidiPath(id, name string) (string, error) {
 		return "", fmt.Errorf("storage: invalid stem name %q", name)
 	}
 	return filepath.Join(dir, "midi", name+".mid"), nil
+}
+
+// EditsPath returns jobs/<id>/edits/<name>.json (the editor's edit revision).
+func (l Layout) EditsPath(id, name string) (string, error) {
+	dir, err := l.JobDir(id)
+	if err != nil {
+		return "", err
+	}
+	if !NamePattern.MatchString(name) {
+		return "", fmt.Errorf("storage: invalid stem name %q", name)
+	}
+	return filepath.Join(dir, "edits", name+".json"), nil
 }
 
 // PeaksPath returns jobs/<id>/peaks/<name>.pk.

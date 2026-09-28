@@ -1,0 +1,18 @@
+{
+  "id": "gm",
+  "name": "General MIDI",
+  "notes": {
+    "kick": 36,
+    "snare": 38,
+    "stick": 37,
+    "hhc": 42,
+    "hho": 46,
+    "hhp": 44,
+    "tomh": 48,
+    "tomm": 47,
+    "tomf": 43,
+    "ride": 51,
+    "bell": 53,
+    "crash": 49
+  }
+}

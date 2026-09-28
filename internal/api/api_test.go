@@ -1228,3 +1228,80 @@ func TestGoogleSignIn(t *testing.T) {
 		}
 	})
 }
+
+// --- drum editor: access rules on an owned transcribe job ---
+
+func TestDrumEditsAccess(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.TranscribeEmails = []string{"owner@example.com"} })
+	e.createUser("owner@example.com", auth.StatusActive)
+	e.createUser("other@example.com", auth.StatusActive)
+	owner, other, anon := e.client(), e.client(), e.client()
+	e.login(owner, "owner@example.com")
+	e.login(other, "other@example.com")
+	resp, body, _ := e.upload(owner, 10, map[string]string{"transcribe": "1", "quality": "high6"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, body)
+	}
+	j := decodeJob(t, body)
+	ctx := context.Background()
+	for _, st := range []string{"converting", "completed"} {
+		if err := jobs.Transition(ctx, e.pool, j.ID, st, 0, st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := jobs.NewStore(e.pool).SetAudioInfo(ctx, j.ID, jobs.AudioInfo{DurationSeconds: 4, SampleRate: 48000, Channels: 2}); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(e.dataDir, "jobs", j.ID)
+	if err := os.MkdirAll(filepath.Join(dir, "notes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	analysis := `{"version":1,"grid":null,"grid_error":"too few beats","sections":null,"instruments":{"drums":{"status":"ok","adapter":"adtof","model":"adtof_frame_rnn","notes":2}}}`
+	notes := `{"stem":"drums","adapter":"adtof","model":"adtof_frame_rnn","notes":[{"onset":0.5,"offset":0.6,"pitch":36,"velocity":0.8},{"onset":1,"offset":1.1,"pitch":38,"velocity":0.9}]}`
+	_ = os.WriteFile(filepath.Join(dir, "analysis.json"), []byte(analysis), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "notes", "drums.json"), []byte(notes), 0o644)
+	base := "/api/v1/jobs/" + j.ID
+
+	for _, tc := range []struct {
+		name string
+		c    *http.Client
+		path string
+		want int
+		code string
+	}{
+		{"owner analysis", owner, "/analysis", 200, ""},
+		{"owner notes", owner, "/notes/drums", 200, ""},
+		{"owner edits", owner, "/drums/edits", 200, ""},
+		{"other analysis", other, "/analysis", 404, "not_found"},
+		{"other edits", other, "/drums/edits", 404, "not_found"},
+		{"anon analysis", anon, "/analysis", 401, "unauthorized"},
+		{"anon edits", anon, "/drums/edits", 401, "unauthorized"},
+	} {
+		resp, body := e.do(tc.c, "GET", base+tc.path, nil, nil)
+		if resp.StatusCode != tc.want || (tc.code != "" && errCode(body) != tc.code) {
+			t.Errorf("%s: %d %s", tc.name, resp.StatusCode, body)
+		}
+	}
+	put := map[string]any{"base_rev": 0, "events": []map[string]any{{"id": "u1", "art": "kick", "t": 0.25, "vel": 0.5, "src": "manual"}}}
+	if resp, body := e.do(other, "PUT", base+"/drums/edits", put, nil); resp.StatusCode != 404 {
+		t.Errorf("other put: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := e.do(anon, "PUT", base+"/drums/edits", put, nil); resp.StatusCode != 401 {
+		t.Errorf("anon put: %d %s", resp.StatusCode, body)
+	}
+	resp, body = e.do(owner, "PUT", base+"/drums/edits", put, nil)
+	if resp.StatusCode != 200 || !strings.Contains(string(body), `"edit_rev":1`) {
+		t.Fatalf("owner put: %d %s", resp.StatusCode, body)
+	}
+	resp, body = e.do(owner, "GET", base+"/drums/edits", nil, nil)
+	if resp.StatusCode != 200 || !strings.Contains(string(body), `"edit_rev":1`) || !strings.Contains(string(body), `"grid":null`) {
+		t.Fatalf("owner get after put: %d %s", resp.StatusCode, body)
+	}
+	// Deleting the job removes the edit revision with everything else.
+	if resp, _ := e.do(owner, "DELETE", base, nil, nil); resp.StatusCode != 204 {
+		t.Fatalf("delete: %d", resp.StatusCode)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "edits", "drums.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("edits survived delete: %v", err)
+	}
+}
