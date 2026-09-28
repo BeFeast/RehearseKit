@@ -272,8 +272,17 @@ function JobPage({ job, lastEvent, frozenAt }: { job: Job; lastEvent: JobEvent |
         </div>
       </div>
 
-      {completed ? (
-        <MixerPanel job={job} onDownload={() => void download()} />
+      {completed && job.stems.length > 0 ? (
+        // Keyed by the stem set: the mixer's state is built from the stems at
+        // mount, so a completion seen live (SSE flips the status before the
+        // refetch brings the stems) must not mount it with an empty set.
+        <MixerPanel key={mixerKey(job)} job={job} onDownload={() => void download()} />
+      ) : completed ? (
+        <Panel className="rk-panel-pad" style={{ padding: 'var(--rk-space-9) var(--rk-space-10) var(--rk-space-10)' }}>
+          <PanelNotice art="processing" title="Loading the stems…">
+            Processing finished; the mixer opens as soon as the stem list arrives.
+          </PanelNotice>
+        </Panel>
       ) : (
         <Panel className="rk-panel-pad" style={{ padding: 'var(--rk-space-9) var(--rk-space-10) var(--rk-space-10)' }} screws={isActive(job.status)}>
           {isActive(job.status) ? (
@@ -375,6 +384,11 @@ function JobPage({ job, lastEvent, frozenAt }: { job: Job; lastEvent: JobEvent |
 }
 
 // ---- the mixer -------------------------------------------------------------
+
+/** Identity of a job's stem set; the mixer remounts when it changes. */
+export function mixerKey(job: Pick<Job, 'id' | 'stems'>): string {
+  return `${job.id}:${job.stems.map((s) => s.name).join(',')}`;
+}
 
 function MixerPanel({ job, onDownload }: { job: Job; onDownload(): void }) {
   const m = useMixer(job);
