@@ -154,3 +154,24 @@ describe('lab-stream-processor', () => {
     expect(proc.port.postMessage).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('audio clock pair', () => {
+  it('publishes the audio frame at which READ_POS reaches the output', () => {
+    const { proc, rings, outputs } = setup([2]);
+    (globalThis as any).currentFrame = 4096;
+    rings.write(0, [ramp(QUANTUM), ramp(QUANTUM)], QUANTUM);
+    rings.write(0, [ramp(QUANTUM), ramp(QUANTUM)], QUANTUM);
+    rings.setState(STATE.PLAYING);
+    proc.process([], outputs);
+    expect(rings.clock()).toEqual({ readPos: QUANTUM, clockFrame: 4096 + QUANTUM });
+    (globalThis as any).currentFrame = 4096 + QUANTUM;
+    proc.process([], outputs);
+    expect(rings.clock()).toEqual({ readPos: 2 * QUANTUM, clockFrame: 4096 + 2 * QUANTUM });
+    // An underrun leaves the pair untouched.
+    (globalThis as any).currentFrame = 4096 + 2 * QUANTUM;
+    proc.process([], outputs);
+    expect(rings.underruns()).toBe(1);
+    expect(rings.clock()).toEqual({ readPos: 2 * QUANTUM, clockFrame: 4096 + 2 * QUANTUM });
+    delete (globalThis as any).currentFrame;
+  });
+});

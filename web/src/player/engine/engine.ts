@@ -112,6 +112,7 @@ export class StreamEngine {
   private node: AudioWorkletNode | null = null;
   private gains: GainNode[] = [];
   private master: GainNode | null = null;
+  private aux: GainNode | null = null;
   private analysers: AnalyserNode[] = [];
   private analyserBuf: Float32Array<ArrayBuffer> | null = null;
   private masterFollow: MasterMeter = { left: zeroMeter(), right: zeroMeter() };
@@ -132,6 +133,7 @@ export class StreamEngine {
   private errorMessage: string | null = null;
   private masterValue = 1;
   private muted: boolean[] = [];
+  private forcedMute: boolean[] = [];
   private soloed: boolean[] = [];
   private gainValues: number[] = [];
   private listeners = new Set<(state: EngineState) => void>();
@@ -158,6 +160,7 @@ export class StreamEngine {
       fetchImpl: options.fetchImpl,
     };
     this.muted = options.stems.map(() => false);
+    this.forcedMute = options.stems.map(() => false);
     this.soloed = options.stems.map(() => false);
     this.gainValues = options.stems.map(() => 1);
   }
@@ -190,6 +193,43 @@ export class StreamEngine {
 
   get loopEnabled(): boolean {
     return this.loopOn;
+  }
+
+  /** The AudioContext once init() ran; null before. Scheduling samples on it keeps them on the stems' clock. */
+  get context(): AudioContext | null {
+    return this.ctx;
+  }
+
+  /** Where auxiliary sources (the sample kit) connect; null before init(). */
+  get auxInput(): AudioNode | null {
+    return this.aux;
+  }
+
+  /** The current play plan (stream frame → song frame), null while stopped. */
+  get playPlan(): PlayPlan | null {
+    return this.isPlaying ? this.plan : null;
+  }
+
+  /** Increments on every seek/replan/stop; scheduled samples belong to one generation. */
+  get streamGeneration(): number {
+    return this.generation;
+  }
+
+  /**
+   * Audio-clock snapshot for schedulers: the stream frame that reaches the
+   * output at audio frame `clockFrame`, plus the context time now. Null
+   * unless playing with a plan.
+   */
+  clock(): { readPos: number; clockFrame: number; ctxTime: number; ctxFrame: number; generation: number; underruns: number } | null {
+    if (!this.ctx || !this.rings || !this.isPlaying || !this.plan) return null;
+    const c = this.rings.clock();
+    return {
+      ...c,
+      ctxTime: this.ctx.currentTime,
+      ctxFrame: Math.round(this.ctx.currentTime * this.ctx.sampleRate) >>> 0,
+      generation: this.generation,
+      underruns: this.rings.underruns(),
+    };
   }
 
   /** Current song position in seconds. */
@@ -246,6 +286,12 @@ export class StreamEngine {
     const master = ctx.createGain();
     master.gain.value = 0;
     master.connect(ctx.destination);
+    // Auxiliary input: sample playback (the drum kit audition) joins the
+    // master here, after the stem faders, so it follows the master level.
+    const aux = ctx.createGain();
+    aux.gain.value = 1;
+    aux.connect(master);
+    this.aux = aux;
     // Master L/R metering: split the summed signal and analyse each side.
     const splitter = ctx.createChannelSplitter(2);
     master.connect(splitter);
@@ -383,6 +429,18 @@ export class StreamEngine {
     this.applyGain(index);
   }
 
+  /**
+   * A mute layered over the mixer's own (used while the sample kit stands in
+   * for the drum stem); mix state is not touched, so leaving the mode
+   * restores the fader/mute exactly.
+   */
+  setForcedMute(index: number, on: boolean): void {
+    if (index < 0 || index >= this.forcedMute.length || this.forcedMute[index] === on) return;
+    this.forcedMute[index] = on;
+    this.applyGain(index);
+    this.notify();
+  }
+
   setMute(index: number, muted: boolean): void {
     this.muted[index] = muted;
     this.applyGain(index);
@@ -511,7 +569,7 @@ export class StreamEngine {
   }
 
   private effectiveGain(index: number): number {
-    return this.muted[index] || this.isSilenced(index) ? 0 : this.gainValues[index];
+    return this.muted[index] || this.forcedMute[index] || this.isSilenced(index) ? 0 : this.gainValues[index];
   }
 
   private applyGain(index: number): void {

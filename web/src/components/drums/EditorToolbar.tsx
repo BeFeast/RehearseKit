@@ -65,8 +65,15 @@ export function EditorToolbar({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
             <button type="button" role="radio" aria-checked={ed.mode === 'original'} onClick={() => ed.setMode('original')}>
               ORIGINAL
             </button>
-            <button type="button" role="radio" aria-checked={ed.mode === 'midi'} onClick={() => ed.setMode('midi')} disabled title="The sample kit lands in the next update">
-              MIDI KIT
+            <button
+              type="button"
+              role="radio"
+              aria-checked={ed.mode === 'midi'}
+              onClick={() => ed.setMode('midi')}
+              title={ed.audition?.status === 'error' ? `Sample kit unavailable: ${ed.audition.error}` : 'Play the edited hits through the sample kit (the drum stem is muted)'}
+              data-testid="drums-mode-midi"
+            >
+              MIDI KIT{ed.audition?.status === 'loading' ? '…' : ''}
             </button>
           </div>
         </div>

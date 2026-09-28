@@ -6,7 +6,7 @@ import { DIVISIONS, makeGrid, type BeatGrid, type GridDivision } from '../lib/dr
 import { editorReducer, fromDoc, initialEditor, primary, selectedHits, toEvents, type EditorAction, type EditorState } from '../lib/drums/model';
 import { layoutRows, type RowLayout } from '../lib/drums/rows';
 import { ARTICULATIONS, GROUP, GROUPS, velFrom127, type Articulation, type GroupKey } from '../lib/drums/taxonomy';
-import { EditConflict, type DrumEditsResponse } from '../lib/drums/types';
+import { EditConflict, type DrumEditsResponse, type DrumEvent } from '../lib/drums/types';
 import type { Mixer } from './use-mixer';
 
 export type EditorTool = 'select' | 'draw' | 'erase';
@@ -59,6 +59,8 @@ export interface DrumEditorHandle {
   isRowMuted(art: Articulation): boolean;
   mode: AuditionMode;
   setMode(m: AuditionMode): void;
+  /** Filled by the DrumEditor once the kit hook is mounted (PR4). */
+  audition: { status: 'idle' | 'loading' | 'ready' | 'error'; error: string | null; play(hits: DrumEvent[]): void } | null;
   autosave: AutosaveState;
   /** Reload the document from the server (after a conflict). */
   reload(): void;
@@ -464,6 +466,7 @@ export function useDrumEditor(m: Mixer, active: boolean, enabled = true): DrumEd
     isRowMuted,
     mode,
     setMode,
+    audition: null,
     autosave,
     reload,
     exportNow,

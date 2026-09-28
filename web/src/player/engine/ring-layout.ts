@@ -10,7 +10,7 @@
  *
  * Ownership of control words:
  *   main thread  -> STATE, EOF_POS, WRITE_POS[i]
- *   audio thread -> READ_POS, UNDERRUNS, ENDED, QUANTA, meter block
+ *   audio thread -> READ_POS, CLOCK_FRAME, UNDERRUNS, ENDED, QUANTA, meter block
  *
  * READ_POS / WRITE_POS are absolute frame counters since the last flush (not
  * ring indices); the ring index is `pos & mask`. Buffered frames for stem i are
@@ -30,6 +30,14 @@ export const CTRL = {
   EOF_POS: 3,
   ENDED: 4,
   QUANTA: 5,
+  /**
+   * Audio-clock frame (AudioWorkletGlobalScope currentFrame, low 32 bits)
+   * at which the stream frame READ_POS reaches the output, written by the
+   * audio thread with every quantum it consumes. Together with READ_POS it
+   * maps AudioContext time onto stream frames, so samples can be scheduled
+   * on the same clock as the streamed stems (see player/kit/scheduler.ts).
+   */
+  CLOCK_FRAME: 6,
   WRITE_POS0: 8,
 } as const;
 

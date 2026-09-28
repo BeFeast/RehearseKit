@@ -41,6 +41,25 @@ export class SharedRings {
     return Atomics.load(this.ctrl, CTRL.READ_POS);
   }
 
+  /**
+   * The audio thread's last (stream frame, audio-clock frame) pair: stream
+   * frame `readPos` reaches the output at audio frame `clockFrame` (low 32
+   * bits of currentFrame). Read CLOCK first, then READ_POS, then CLOCK
+   * again; a torn pair (the worklet ran in between) is retried once — a
+   * one-quantum mismatch (128 frames) is the worst case after that.
+   */
+  clock(): { readPos: number; clockFrame: number } {
+    let c1 = Atomics.load(this.ctrl, CTRL.CLOCK_FRAME);
+    let r = Atomics.load(this.ctrl, CTRL.READ_POS);
+    let c2 = Atomics.load(this.ctrl, CTRL.CLOCK_FRAME);
+    if (c1 !== c2) {
+      c1 = c2;
+      r = Atomics.load(this.ctrl, CTRL.READ_POS);
+      c2 = Atomics.load(this.ctrl, CTRL.CLOCK_FRAME);
+    }
+    return { readPos: r, clockFrame: c2 >>> 0 };
+  }
+
   writePos(stem: number): number {
     return Atomics.load(this.ctrl, CTRL.WRITE_POS0 + stem);
   }

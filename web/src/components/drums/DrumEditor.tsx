@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import { GROUP } from '../../lib/drums/taxonomy';
 import type { Mixer } from '../../player/use-mixer';
 import type { DrumEditorHandle } from '../../player/use-drum-editor';
+import { useKitAudition } from '../../player/use-kit-audition';
 import { PanelNotice } from '../EmptyState';
 import { EditorCanvas } from './EditorCanvas';
 import { EditorToolbar } from './EditorToolbar';
@@ -14,7 +16,9 @@ import { VelocityLane } from './VelocityLane';
  * The DRUM EDITOR tab (design: RehearseKit Mixer v2). Desktop only (≥ 900 px);
  * transport, loop and position are the mixer's.
  */
-export function DrumEditor({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
+export function DrumEditor({ ed: base, m }: { ed: DrumEditorHandle; m: Mixer }) {
+  const kit = useKitAudition(m, base, base.status === 'ready');
+  const ed = useMemo<DrumEditorHandle>(() => ({ ...base, audition: { status: kit.status, error: kit.error, play: kit.auditionNow } }), [base, kit.status, kit.error, kit.auditionNow]);
   const hasSel = ed.state.selection.length > 0;
   if (ed.status === 'loading') {
     return (

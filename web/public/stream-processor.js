@@ -17,7 +17,7 @@
  * meter.releaseDbPerS (−20 dB/s); the hold lasts meter.holdSeconds (1.5 s).
  */
 
-/* global AudioWorkletProcessor, registerProcessor, sampleRate */
+/* global AudioWorkletProcessor, registerProcessor, sampleRate, currentFrame */
 
 class LabStreamProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -143,6 +143,12 @@ class LabStreamProcessor extends AudioWorkletProcessor {
       this.meterStem(i, rings, r, need);
     }
 
+    // Stream frame r+need reaches the output at audio frame currentFrame+need
+    // (currentFrame is the start of this quantum); publish the pair so the
+    // main thread can schedule on the audio clock.
+    if (C.CLOCK_FRAME !== undefined && typeof currentFrame === 'number') {
+      Atomics.store(ctrl, C.CLOCK_FRAME, (currentFrame + need) | 0);
+    }
     Atomics.store(ctrl, C.READ_POS, (r + need) | 0);
     Atomics.add(ctrl, C.QUANTA, 1);
     return true;
