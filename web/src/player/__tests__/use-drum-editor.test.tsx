@@ -60,7 +60,7 @@ const events: DrumEvent[] = [
 
 function response(rev = 0): DrumEditsResponse {
   return {
-    doc: { version: 1, stem: 'drums', model_rev: { adapter: 'adtof', model: 'adtof_frame_rnn', count: 3, notes_sha256: 'x' }, edit_rev: rev, exported_rev: 0, profile: 'gm', updated_at: '2026-09-28T12:00:00Z', events },
+    doc: { version: 1, stem: 'drums', model_rev: { adapter: 'adtof', model: 'adtof_frame_rnn', count: 3, notes_sha256: 'x' }, edit_rev: rev, exported_rev: null, profile: 'gm', updated_at: '2026-09-28T12:00:00Z', events },
     profile: { id: 'gm', name: 'General MIDI', notes: { kick: 36, snare: 38, stick: 37, hhc: 42, hho: 46, hhp: 44, tomh: 48, tomm: 47, tomf: 43, ride: 51, bell: 53, crash: 49 } },
     grid: null,
     grid_error: 'no grid',

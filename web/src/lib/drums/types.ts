@@ -26,7 +26,8 @@ export interface DrumDoc {
   stem: 'drums';
   model_rev: ModelRev;
   edit_rev: number;
-  exported_rev: number;
+  /** Revision of the last export; null until the first one. */
+  exported_rev: number | null;
   profile: string;
   updated_at: string;
   events: DrumEvent[];

@@ -81,7 +81,7 @@ export function DrumEditor({ ed, m }: { ed: DrumEditorHandle; m: Mixer }) {
         </div>
         <div className="rk-drums-foot">
           <p>Moving a MIDI hit never moves the audio transient · Quantize only touches selected hits · Alt-drag bypasses snap · Ctrl+wheel zoom, wheel pan · Space play</p>
-          <p style={{ whiteSpace: 'nowrap' }}>{ed.autosave.editRev > 0 && ed.data?.doc.exported_rev === ed.autosave.editRev ? `Exported · rev ${ed.autosave.editRev}` : 'Export uses the saved revision and the GM map'}</p>
+          <p style={{ whiteSpace: 'nowrap' }}>{ed.data?.doc.exported_rev !== null && ed.data?.doc.exported_rev === ed.autosave.editRev ? `Exported · rev ${ed.autosave.editRev}` : 'Export uses the saved revision and the GM map'}</p>
         </div>
       </div>
       <div className="rk-drums-narrow" data-testid="drums-narrow">
