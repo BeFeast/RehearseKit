@@ -8,6 +8,7 @@ import { JobDetailRoute, jobSearchSchema } from './routes/JobDetail';
 import { PendingApprovalRoute } from './routes/PendingApproval';
 import { ProfileRoute } from './routes/Profile';
 import { AdminUsersRoute, adminSearchSchema } from './routes/AdminUsers';
+import { CreditsRoute } from './routes/Credits';
 
 function Layout() {
   return (
@@ -47,7 +48,9 @@ export const adminUsersRoute = createRoute({
   validateSearch: adminSearchSchema,
 });
 
-const routeTree = rootRoute.addChildren([landingRoute, jobsRoute, jobRoute, pendingRoute, profileRoute, adminUsersRoute]);
+export const creditsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/credits', component: CreditsRoute });
+
+const routeTree = rootRoute.addChildren([landingRoute, jobsRoute, jobRoute, pendingRoute, profileRoute, adminUsersRoute, creditsRoute]);
 
 export const router = createRouter({
   routeTree,

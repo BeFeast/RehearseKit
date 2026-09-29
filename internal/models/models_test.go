@@ -37,6 +37,14 @@ func TestManifestPublicClosure(t *testing.T) {
 		if rc.Engine == EngineDemucs {
 			t.Errorf("public %s runs demucs (%s)", q, rc.ID)
 		}
+		if len(rc.Credits()) == 0 {
+			t.Errorf("public %s → %s has no attribution", q, rc.ID)
+		}
+		for _, c := range rc.Credits() {
+			if strings.Contains(c, "internal use") {
+				t.Errorf("public %s → %s credits %q", q, rc.ID, c)
+			}
+		}
 	}
 	for _, q := range []string{"fast", "high6"} {
 		if _, ok := RecipeFor(Public, q); ok {

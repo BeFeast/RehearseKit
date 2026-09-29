@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { badgeTone, canCancel, isActive, isTerminal, lampStates, overallProgress, qualityBadge, rowTone, STAGE_COPY, stageNoun, statusLabel } from '../stages';
+import { badgeTone, canCancel, isActive, isTerminal, jobModel, lampStates, modelName, overallProgress, qualityBadge, rowTone, STAGE_COPY, stageNoun, stemModelCaption, statusLabel } from '../stages';
 
 describe('status → stage mapping', () => {
-  it('keeps the upstream stage copy verbatim', () => {
+  it('keeps the upstream stage copy (separating no longer names Demucs: #35)', () => {
     expect(STAGE_COPY.separating.message).toBe('Separating stems with AI...');
-    expect(STAGE_COPY.separating.detail).toBe('Using Demucs AI to separate vocals, drums, bass, and other instruments');
+    expect(STAGE_COPY.separating.detail).toBe('Separating vocals, drums, bass, and other instruments');
     expect(STAGE_COPY.completed.detail).toBe('Stems, DAWproject file and tempo map are ready');
   });
 
@@ -56,7 +56,18 @@ describe('status → stage mapping', () => {
     expect(rowTone('failed')).toBe('failed');
     expect(rowTone('pending')).toBe('running');
     expect(rowTone('completed')).toBe('');
-    expect(qualityBadge('high')).toBe('HIGH QUALITY');
-    expect(qualityBadge('high6')).toBe('HQ · 6 STEMS');
+    expect(qualityBadge('high')).toBe('STANDARD');
+    expect(qualityBadge('high6')).toBe('STD · 6 STEMS');
+    expect(qualityBadge('hifi')).toBe('PLUS HIFI');
+  });
+
+  it('names the model behind each stem', () => {
+    expect(jobModel({ quality: 'high' })).toBe('htdemucs_ft');
+    expect(jobModel({ quality: 'hifi', model: 'kim+scnet_xl_ihf' })).toBe('kim+scnet_xl_ihf');
+    expect(stemModelCaption('kim+scnet_xl_ihf', 'vocals')).toBe('ROFORMER');
+    expect(stemModelCaption('kim+scnet_xl_ihf', 'drums')).toBe('SCNET XL');
+    expect(stemModelCaption('scnet_xl_ihf', 'vocals')).toBe('SCNET XL');
+    expect(stemModelCaption('htdemucs_6s', 'guitar')).toBe('DEMUCS 6S');
+    expect(modelName('kim+bs_rofo_sw')).toBe('RoFormer vocals + BS-RoFormer SW');
   });
 });

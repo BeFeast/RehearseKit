@@ -82,7 +82,8 @@ type ReadmeParams struct {
 	BPM         *float64
 	Duration    float64
 	Stems       []string
-	Model       string
+	Model       string   // separation recipe, human name
+	Credits     []string // attribution of the weights that separated this job
 	// Transcribe is set for transcribe jobs.
 	Transcribe *TranscribeSummary
 }
@@ -108,8 +109,15 @@ func Readme(p ReadmeParams) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "REHEARSEKIT PACKAGE: %s\n", p.ProjectName)
 	b.WriteString(strings.Repeat("=", 60) + "\n\n")
-	fmt.Fprintf(&b, "Tempo:        %s\nDuration:     %d:%02d\nStems:        %s\nSeparation:   Demucs %s\nFormat:       24-bit / 48 kHz stereo WAV\n\n",
+	fmt.Fprintf(&b, "Tempo:        %s\nDuration:     %d:%02d\nStems:        %s\nSeparation:   %s\nFormat:       24-bit / 48 kHz stereo WAV\n\n",
 		bpm, int(p.Duration)/60, int(p.Duration)%60, strings.Join(p.Stems, ", "), p.Model)
+	if len(p.Credits) > 0 {
+		b.WriteString("MODELS\n")
+		for _, c := range p.Credits {
+			fmt.Fprintf(&b, "  %s\n", c)
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString(`CONTENTS
   stems/<name>.wav       individual stems for any DAW
   project.dawproject     DAWproject 1.0 archive (Cubase 14, Bitwig, Studio One 7, Reaper)

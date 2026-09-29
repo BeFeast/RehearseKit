@@ -2,35 +2,70 @@
 
 The runner is a pull client: it never needs an inbound port. It leases a
 job from `rk serve`, downloads the converted source through a signed URL,
-runs Demucs on the GPU, uploads 24-bit/48 kHz stems through signed PUT
+runs the job's separation recipe on the GPU, uploads 24-bit/48 kHz stems through signed PUT
 URLs, heartbeats progress, and completes or fails the lease.
 
-## Image
+## Images: one per model stack
+
+Every job carries a model stack, chosen by the server from the account
+(`RK_INTERNAL_EMAILS`, see `internal/models`):
+
+* **public**: every account and anonymous upload. It runs SCNet XL IHF (Standard, 4 stems) and
+  MelBand RoFormer Kim → SCNet XL IHF on the instrumental (Plus HiFi, 4 stems). Only
+  public-class weights are allowed.
+* **internal**: owner and allowlist. It runs everything above plus the Demucs presets, Kim →
+  BS-RoFormer SW (6-stem HiFi) and transcription.
+
+There are two build targets from one Dockerfile:
 
 ```bash
 # from the repository root
-docker build -f deploy/gpu-runner/Dockerfile -t ghcr.io/kossoy/rk-gpu-runner:latest .
-docker push ghcr.io/kossoy/rk-gpu-runner:latest
+docker build -f deploy/gpu-runner/Dockerfile --target public   -t ghcr.io/kossoy/rk-gpu-runner:public-<tag> .
+docker build -f deploy/gpu-runner/Dockerfile --target internal -t ghcr.io/kossoy/rk-gpu-runner:internal-<tag> .
 ```
 
-Base: `pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime` + ffmpeg + `demucs==4.0.1`
-with `htdemucs`, `htdemucs_ft` and `htdemucs_6s` pre-downloaded into
-`/models` (`TORCH_HOME`). The `rk` binary is built in a `golang:1.26` stage.
+| | public | internal |
+|---|---|---|
+| Separation | MSST @ `84b1eac` (inference modules only, `requirements-separate.txt`) | same + `demucs==4.0.1` |
+| Weights under `/models` | Kim, SCNet XL IHF + configs (1.1 GB) | all of `internal/models/manifest.json` |
+| Transcription | none | Beat This!, ADTOF, hf_midi, optional MuScriptor |
+| `RK_RUNNER_STACK` | `public` | `internal` (`RK_TRANSCRIBE=1`) |
 
-### Transcription stack (tag `transcribe-s1` and later)
+The same checks run for both targets:
 
-The image also carries the beat grid + MIDI adapters (`tools/transcribe/`,
-copied to `/opt/rk/tools/transcribe`) and runs the agent with
-`RK_TRANSCRIBE=1`, so it advertises `X-Runner-Features: transcribe` and is
-offered transcribe jobs (an older `:latest` runner never sees them).
-Pins live in `requirements-transcribe.txt` (torch 2.2 / numpy<2):
+* **Pinning.** `fetch_models.py` downloads every checkpoint from the pinned URL in the manifest
+  (revision-pinned HF path, release asset or content-addressed Demucs file). It checks size and
+  sha256 and fails the build on a mismatch.
+* **Build-time verify.** `fetch_models.py --verify`, the last build step, fails if a checkpoint is
+  missing or changed, or if any other file sits under `/models`. On the public target it also
+  fails if an internal-only package is installed (`demucs`, `adtof_pytorch`, `muscriptor`,
+  `hf_midi_transcription`).
+* **Runtime.** At startup the agent hashes every checkpoint again (`models.Scan`). It refuses to
+  start if a public image holds any internal weights, and advertises only the recipes whose
+  weights verified (`X-Runner-Recipes`, `X-Runner-Stack`). Before each lease it checks the recipe
+  against the job's stack and its own stack (`models.Check`).
+* **Egress lock.** Every Python child (separation, transcription) runs with `RK_EGRESS_DIR` on
+  `PYTHONPATH`. Its `sitecustomize` blocks all non-loopback sockets and DNS, so no library can
+  download weights or send anything during inference. Vast containers have no NET_ADMIN, so
+  iptables is not an option there. The Go agent keeps its network for the API.
 
-| Adapter | Package | Weights baked at build | Licence |
+Recipe timings (A/B, [`docs/rebuild/ab-public-separator.md`](../../docs/rebuild/ab-public-separator.md)),
+5:56 track on an RTX 3060: SCNet XL IHF 85 s, Kim + SCNet XL IHF 122 s.
+
+### Transcription stack (internal image only)
+
+The internal image carries the beat grid + MIDI adapters (`tools/transcribe/`, copied to
+`/opt/rk/tools/transcribe`) and runs the agent with `RK_TRANSCRIBE=1`, so it advertises
+`X-Runner-Features: transcribe`. The server offers transcription only to internal accounts.
+Pins live in `requirements-transcribe.txt` (torch 2.2 / numpy<2); the weights are in the
+manifest.
+
+| Adapter | Package | Weights | Licence of the weights |
 |---|---|---|---|
-| grid: `beatthis` | `beat-this==1.1.0` (needs `rotary-embedding-torch<0.9`) | `/models/beat_this-final0.ckpt` (78 MB, cloud.cp.jku.at) | MIT |
-| drums: `adtof` | `xavriley/ADTOF-pytorch@85c192e` (5 classes → GM 36/38/42/48/49) | in the package (3.6 MB) | MIT |
-| guitar/bass/piano: `hfmidi` (default) | `xavriley/hf_midi_transcription@96f6797` | `/models/hf_midi/{guitar-gaps,filobass_20000_iterations,piano}.pth` (300 MB, HF `xavriley/midi-transcription-models`, not gated) | MIT |
-| guitar/bass/piano: `muscriptor` | `muscriptor==0.3.0` (later releases need torch ≥ 2.3) | **not downloaded by the build**: weights are CC BY-NC 4.0 and gated on HF; accept the licence, then on the build host `hf download MuScriptor/muscriptor-medium model.safetensors config.json --local-dir deploy/gpu-runner/models/muscriptor/medium` (gitignored) and rebuild. The token never enters the image | code MIT, weights CC BY-NC |
+| grid: `beatthis` | `beat-this==1.1.0` (needs `rotary-embedding-torch<0.9`) | `/models/beat_this-final0.ckpt` (78 MB, cloud.cp.jku.at, sha256 in the manifest) | MIT (training data partly copyrighted) |
+| drums: `adtof` | `xavriley/ADTOF-pytorch@85c192e` (5 classes → GM 36/38/42/48/49) | in the package (3.6 MB, sha256 checked by `--verify`) | **CC BY-NC-SA 4.0**. The package code is MIT; the ADTOF weights are not |
+| guitar/bass/piano: `hfmidi` (default) | `xavriley/hf_midi_transcription@96f6797` | `/models/hf_midi/{guitar-gaps,filobass_20000_iterations,piano}.pth` (300 MB, HF `xavriley/midi-transcription-models` @ `b7bec65a`) | `piano.pth`: **CC BY 4.0, Edwards et al.** (Zenodo 10610212, attribution required). guitar/bass: MIT tag on the HF repo, but GAPS and FiloBass data are non-commercial |
+| guitar/bass/piano: `muscriptor` | `muscriptor==0.3.0` (later releases need torch ≥ 2.3) | **not downloaded by the build**: the weights are CC BY-NC 4.0 and gated on HF. Accept the licence, then on the build host run `hf download MuScriptor/muscriptor-medium model.safetensors config.json --local-dir deploy/gpu-runner/models/muscriptor/medium` (gitignored) and rebuild. The token never enters the image | code MIT, weights CC BY-NC |
 | sections | none in S1 (`off`) | — | — |
 
 Adapter selection: `RK_ADAPTER_GRID`, `RK_ADAPTER_DRUMS`, `RK_ADAPTER_BASS`,
@@ -69,7 +104,12 @@ recorded in the PR that introduced the tag.
 | `RK_WORK_DIR` / `--work-dir` | scratch (default `/work` in the image) |
 | `RK_POLL_INTERVAL` / `--poll` | idle poll (default `5s`) |
 | `RK_ONCE=1` / `--once` | process one job, then exit |
-| `RK_TRANSCRIBE=1` / `--transcribe` | advertise and run the transcription adapters (on in the image) |
+| `RK_RUNNER_STACK` / `--stack` | `public` or `internal` (set by the image). Empty is a pre-registry runner: Demucs only, no recipe list |
+| `RK_MODELS_DIR` / `--models-dir` | pinned weights, verified at startup (`/models`) |
+| `RK_MODELS_MANIFEST` / `--models-manifest` | manifest for the separation script (`/opt/rk/models.json`) |
+| `RK_SEPARATE_TOOL` / `--separate-tool` | MSST recipe runner (`/opt/rk/tools/separate/separate.py`) |
+| `RK_EGRESS_DIR` / `--egress-dir` | egress lock for Python children (`/opt/rk/tools/egress`) |
+| `RK_TRANSCRIBE=1` / `--transcribe` | advertise and run the transcription adapters (internal image; refused on a public runner) |
 | `RK_TRANSCRIBE_TOOLS` / `--transcribe-tools` | adapter scripts directory (`/opt/rk/tools/transcribe` in the image) |
 | `RK_TRANSCRIBE_DEVICE` / `--transcribe-device` | adapters' device (default `--device`) |
 | `RK_ADAPTER_{GRID,DRUMS,BASS,GUITAR,PIANO,SECTIONS}` | adapter per stem: `beatthis`, `adtof`, `hfmidi`, `muscriptor`, `off` |

@@ -11,7 +11,7 @@ export type JobStatus =
   | 'failed'
   | 'cancelled';
 
-export type Quality = 'fast' | 'high' | 'high6';
+export type Quality = 'fast' | 'high' | 'high6' | 'hifi';
 
 export type StemName = 'vocals' | 'drums' | 'bass' | 'other' | 'guitar' | 'piano';
 
@@ -34,6 +34,10 @@ export interface Job {
   input_url: string | null;
   source_filename: string | null;
   quality: Quality;
+  /** Model stack the job was created under (public | internal); absent on older servers. */
+  stack?: 'public' | 'internal';
+  /** Separation recipe id (internal/models/manifest.json); absent on older servers. */
+  model?: string;
   /** Owner-only: beat grid + per-stem MIDI in the package. */
   transcribe: boolean;
   status: JobStatus;
@@ -79,7 +83,7 @@ export interface User {
   status: UserStatus;
   created_at: string;
   last_login_at: string | null;
-  /** Feature flags enabled for this account (e.g. "transcribe"). */
+  /** Feature flags enabled for this account ("transcribe", "internal"). */
   features?: string[];
 }
 

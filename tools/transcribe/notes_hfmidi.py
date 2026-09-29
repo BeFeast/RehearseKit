@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Guitar / bass / piano transcription with the xavriley fine-tunes of the
-bytedance piano-transcription CRNN (MIT; hf_midi_transcription's models):
-stem.wav → notes.json.
+bytedance piano-transcription CRNN (bytedance code Apache 2.0;
+hf_midi_transcription's models): stem.wav → notes.json.
+
+Weights licences (docs/CREDITS.md): piano.pth is Edwards et al., CC BY 4.0
+(attribution required); guitar-gaps and filobass carry the HF repo's MIT tag
+but were trained on non-commercial data. Internal stack only.
 
 Checkpoints (xavriley/midi-transcription-models on Hugging Face, not gated)
 are expected under $RK_MODELS_DIR/hf_midi/<file>.pth. All three are plain

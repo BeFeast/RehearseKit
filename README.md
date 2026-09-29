@@ -13,7 +13,7 @@ Transform any audio source into a ready-to-use rehearsal project in minutes. Reh
 
 ### Core Functionality
 - 🎵 **Audio Input**: Upload MP3, WAV, or FLAC files, or paste YouTube URLs
-- 🎼 **AI Stem Separation**: Isolate vocals, drums, bass, and other instruments using Demucs
+- 🎼 **AI Stem Separation**: Isolate vocals, drums, bass, and other instruments (public stack: SCNet XL IHF, MelBand RoFormer vocals in Plus HiFi; see [docs/CREDITS.md](docs/CREDITS.md))
 - ⏱️ **Tempo Detection**: Automatic BPM analysis with manual override
 - ✂️ **Waveform Trimming**: Visual region selection to process only specific portions
 - 🎹 **DAW Integration**: Auto-generated .dawproject files (Studio One, Bitwig, Reaper, Cubase)
@@ -156,7 +156,7 @@ RehearseKit/
 ### Technology Stack
 - **Frontend**: Next.js 14, React Query, WaveSurfer.js, Web Audio API, shadcn/ui
 - **Backend**: FastAPI, SQLAlchemy, Celery, Alembic
-- **AI/Audio**: Demucs (stem separation), librosa (tempo detection), FFmpeg, yt-dlp
+- **AI/Audio**: SCNet XL IHF and MelBand RoFormer via Music-Source-Separation-Training (public stack), Demucs (internal stack only), librosa (tempo detection), FFmpeg, yt-dlp
 - **Infrastructure**: Docker, PostgreSQL 16, Redis 7
 - **Deployment**: TrueNAS SCALE, Cloudflare Tunnel
 
@@ -242,13 +242,18 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
 
 ## 📝 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+The code is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+The MIT licence covers this repository's code only. Model weights have their own licences, and
+several of them are not MIT: Demucs weights are research-only, ADTOF weights are CC BY-NC-SA 4.0,
+MuScriptor weights are CC BY-NC 4.0, and BS-RoFormer SW has no licence at all. Those run only on the
+internal stack. [docs/CREDITS.md](docs/CREDITS.md) lists every model, its licence and attribution.
 
 ---
 
 ## 🙏 Acknowledgments
 
-- **Demucs** - AI-powered stem separation
+- **SCNet XL IHF** (ZFTurbo, Music-Source-Separation-Training) and **MelBand RoFormer** (Kimberley Jensen) - stem separation; full list in [docs/CREDITS.md](docs/CREDITS.md)
+- **Demucs** (Meta) - stem separation on the internal stack
 - **WaveSurfer.js** - Audio waveform visualization
 - **shadcn/ui** - Beautiful UI components
 - **FastAPI** - Modern Python web framework

@@ -558,7 +558,7 @@ func (r *run) pack(ctx context.Context) error {
 	}
 	entries = append(entries,
 		pack.Entry{Name: "README.txt", Compress: true, Data: pack.Readme(pack.ReadmeParams{
-			ProjectName: r.job.ProjectName, BPM: r.tempo.BPM, Duration: r.info.Duration(), Stems: r.stems, Model: r.model,
+			ProjectName: r.job.ProjectName, BPM: r.tempo.BPM, Duration: r.info.Duration(), Stems: r.stems, Model: r.job.Recipe().Label, Credits: r.job.Recipe().Credits(),
 			Transcribe: r.summary,
 		})},
 	)

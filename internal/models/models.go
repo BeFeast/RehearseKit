@@ -53,6 +53,8 @@ type Checkpoint struct {
 	// Role "transcribe" marks weights used by the transcription adapters
 	// rather than by a separation recipe.
 	Role string `json:"role,omitempty"`
+	// Credit is the attribution line written into a job's package README.
+	Credit string `json:"credit,omitempty"`
 }
 
 // Recipe is a separation pipeline: the engine, the stems it yields and the
@@ -71,6 +73,17 @@ func (r Recipe) Stems() []string {
 		return SixStems
 	}
 	return FourStems
+}
+
+// Credits lists the attribution lines of the weights the recipe loads, once each.
+func (r Recipe) Credits() []string {
+	var out []string
+	for _, id := range r.Checkpoints {
+		if c := reg.checkpoints[id]; c.Credit != "" && !slices.Contains(out, c.Credit) {
+			out = append(out, c.Credit)
+		}
+	}
+	return out
 }
 
 // Class is the most restrictive class among the recipe's checkpoints.
