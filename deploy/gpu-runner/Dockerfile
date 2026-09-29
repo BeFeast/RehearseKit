@@ -58,9 +58,6 @@ RUN git clone -q https://github.com/ZFTurbo/Music-Source-Separation-Training.git
 
 COPY internal/models/manifest.json /opt/rk/models.json
 COPY deploy/gpu-runner/fetch_models.py /opt/rk/fetch_models.py
-COPY tools/separate /opt/rk/tools/separate
-COPY tools/egress /opt/rk/tools/egress
-COPY --from=build /out/rk /usr/local/bin/rk
 RUN mkdir -p /work /models
 
 # vast.ai launches images in "ssh" mode with its own entrypoint and runs the
@@ -73,6 +70,10 @@ ENV RK_RUNNER_STACK=public
 RUN python /opt/rk/fetch_models.py --manifest /opt/rk/models.json --dest /models --stack public \
  && python /opt/rk/fetch_models.py --manifest /opt/rk/models.json --dest /models --stack public --verify \
  && du -sh /models
+# Code after the weights, so a code change does not re-download them.
+COPY tools/separate /opt/rk/tools/separate
+COPY tools/egress /opt/rk/tools/egress
+COPY --from=build /out/rk /usr/local/bin/rk
 
 FROM public AS internal
 ENV RK_RUNNER_STACK=internal \

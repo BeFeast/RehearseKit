@@ -96,7 +96,11 @@ def main():
     import soundfile as sf
     import torch
 
-    device = torch.device(a.device if a.device != "cuda" or torch.cuda.is_available() else "cpu")
+    # An explicit index: MSST asks torch.cuda.mem_get_info(device), which on torch 2.2
+    # rejects a bare "cuda".
+    device = torch.device("cuda:0" if a.device.startswith("cuda") and torch.cuda.is_available() else "cpu")
+    if a.device.startswith("cuda:"):
+        device = torch.device(a.device)
     mix, _ = librosa.load(a.input, sr=SR, mono=False)
     if mix.ndim == 1:
         mix = np.stack([mix, mix])
