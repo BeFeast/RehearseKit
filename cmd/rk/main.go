@@ -236,6 +236,11 @@ func runGPUAgent(args []string) error {
 	transcribeTools := fs.String("transcribe-tools", os.Getenv("RK_TRANSCRIBE_TOOLS"), "directory with the adapter scripts, tools/transcribe (or RK_TRANSCRIBE_TOOLS)")
 	transcribeDevice := fs.String("transcribe-device", os.Getenv("RK_TRANSCRIBE_DEVICE"), "device for the adapters (or RK_TRANSCRIBE_DEVICE; default --device)")
 	gridTimeout := fs.Duration("grid-timeout", envDuration("RK_TRANSCRIBE_TIMEOUT_GRID", 5*time.Minute), "beat tracker timeout (or RK_TRANSCRIBE_TIMEOUT_GRID)")
+	stack := fs.String("stack", os.Getenv("RK_RUNNER_STACK"), "model stack of this runner image: public or internal (or RK_RUNNER_STACK; empty = pre-registry Demucs runner)")
+	modelsDir := fs.String("models-dir", envOr("RK_MODELS_DIR", "/models"), "pinned weights, verified against the manifest at startup (or RK_MODELS_DIR)")
+	manifest := fs.String("models-manifest", envOr("RK_MODELS_MANIFEST", "/opt/rk/models.json"), "internal/models/manifest.json as installed (or RK_MODELS_MANIFEST)")
+	separateTool := fs.String("separate-tool", envOr("RK_SEPARATE_TOOL", "/opt/rk/tools/separate/separate.py"), "MSST recipe runner (or RK_SEPARATE_TOOL)")
+	egressDir := fs.String("egress-dir", os.Getenv("RK_EGRESS_DIR"), "directory with the sitecustomize egress lock for Python children (or RK_EGRESS_DIR; empty = no lock)")
 	notesTimeout := fs.Duration("notes-timeout", envDuration("RK_TRANSCRIBE_TIMEOUT_NOTES", 15*time.Minute), "per-instrument transcription timeout (or RK_TRANSCRIBE_TIMEOUT_NOTES)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -249,7 +254,8 @@ func runGPUAgent(args []string) error {
 	a, err := agent.New(agent.Config{
 		APIURL: *apiURL, Token: *token, RunnerID: *runnerID, Python: *python, Device: *device,
 		WorkDir: *workDir, Poll: *poll, Once: *once, DemucsExtra: strings.Fields(*extra), SignedURLBase: *signedBase,
-		RebaseSignedURLs: *rebase,
+		RebaseSignedURLs: *rebase, Stack: *stack, ModelsDir: *modelsDir, Manifest: *manifest, SeparateScript: *separateTool,
+		EgressDir: *egressDir,
 		Transcribe: agent.TranscribeConfig{
 			Enabled: *transcribe, ToolsDir: *transcribeTools, Device: *transcribeDevice, Adapters: adapters,
 			GridTimeout: *gridTimeout, NotesTimeout: *notesTimeout,

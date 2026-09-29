@@ -12,6 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/BeFeast/RehearseKit/internal/models"
 )
 
 // Errors returned by Store.
@@ -37,13 +39,13 @@ func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 
 const jobColumns = `id, owner_id, claim_token_hash, project_name, input_type, input_url, source_filename, quality,
 	status, stage_progress, error, detected_bpm, duration_seconds, sample_rate, channels,
-	created_at, started_at, completed_at, expires_at, transcribe`
+	created_at, started_at, completed_at, expires_at, transcribe, stack, coalesce(model, '')`
 
 func scanJob(row pgx.Row) (*Job, error) {
 	var j Job
 	err := row.Scan(&j.ID, &j.OwnerID, &j.claimTokenHash, &j.ProjectName, &j.InputType, &j.InputURL, &j.SourceFilename,
 		&j.Quality, &j.Status, &j.StageProgress, &j.Error, &j.DetectedBPM, &j.DurationSeconds, &j.SampleRate, &j.Channels,
-		&j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.ExpiresAt, &j.Transcribe)
+		&j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.ExpiresAt, &j.Transcribe, &j.Stack, &j.Model)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -88,6 +90,8 @@ type CreateParams struct {
 	InputURL       *string
 	SourceFilename *string
 	Quality        string
+	Stack          string // models.Public | models.Internal
+	Model          string // recipe id, models.RecipeFor(Stack, Quality)
 	Transcribe     bool
 	ExpiresAt      time.Time
 }
@@ -95,16 +99,29 @@ type CreateParams struct {
 // Create inserts a pending job (with the id chosen by the caller so the
 // upload can be stored first) and its first job_event.
 func (s *Store) Create(ctx context.Context, id string, p CreateParams) (*Job, error) {
+	if p.Stack == "" {
+		// Callers that predate the registry (tests, tools) keep the old
+		// behaviour: Demucs by quality, which is the internal stack.
+		p.Stack, p.Model = models.Internal, LegacyModel(p.Quality)
+	}
+	if p.Model == "" {
+		rc, ok := models.RecipeFor(p.Stack, p.Quality)
+		if !ok {
+			return nil, fmt.Errorf("jobs: stack %s has no quality %s", p.Stack, p.Quality)
+		}
+		p.Model = rc.ID
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 	j, err := scanJob(tx.QueryRow(ctx, `INSERT INTO jobs
-		(id, owner_id, claim_token_hash, project_name, input_type, input_url, source_filename, quality, status, expires_at, transcribe)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $10)
+		(id, owner_id, claim_token_hash, project_name, input_type, input_url, source_filename, quality, status, expires_at, transcribe, stack, model)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $10, $11, $12)
 		RETURNING `+jobColumns,
-		id, p.OwnerID, p.ClaimTokenHash, p.ProjectName, p.InputType, p.InputURL, p.SourceFilename, p.Quality, p.ExpiresAt, p.Transcribe))
+		id, p.OwnerID, p.ClaimTokenHash, p.ProjectName, p.InputType, p.InputURL, p.SourceFilename, p.Quality, p.ExpiresAt, p.Transcribe,
+		p.Stack, p.Model))
 	if err != nil {
 		return nil, err
 	}

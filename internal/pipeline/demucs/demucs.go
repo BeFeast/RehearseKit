@@ -30,6 +30,8 @@ type Options struct {
 	OutDir string // demucs -o; stems land in OutDir/<Model>/<stem>.flac
 	// Extra args appended verbatim (e.g. --segment 7 on small GPUs).
 	Extra []string
+	// Env is appended to the child's environment (egress lock).
+	Env []string
 }
 
 // Bars is the number of tqdm bars demucs shows per track for a model
@@ -131,7 +133,7 @@ func Run(ctx context.Context, o Options, progress func(float64)) (string, error)
 		o.Python = "python3"
 	}
 	if o.Model == "" {
-		o.Model = "htdemucs"
+		return "", errors.New("demucs: no model given")
 	}
 	if err := os.MkdirAll(o.OutDir, 0o755); err != nil {
 		return "", err
@@ -144,7 +146,7 @@ func Run(ctx context.Context, o Options, progress func(float64)) (string, error)
 	args = append(args, o.Input)
 	cmd := exec.CommandContext(ctx, o.Python, args...)
 	cmd.WaitDelay = 5 * time.Second
-	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+	cmd.Env = append(append(os.Environ(), "PYTHONUNBUFFERED=1"), o.Env...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return "", err

@@ -19,13 +19,16 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/BeFeast/RehearseKit/internal/gpu"
 	"github.com/BeFeast/RehearseKit/internal/jobs"
+	"github.com/BeFeast/RehearseKit/internal/models"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/demucs"
+	"github.com/BeFeast/RehearseKit/internal/pipeline/separate"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/wavcheck"
 )
 
@@ -52,12 +55,31 @@ type Config struct {
 	// Transcribe configures the beat grid + MIDI adapters; when Enabled the
 	// runner advertises the capability and is offered transcribe jobs.
 	Transcribe TranscribeConfig
+
+	// Stack is the runner image's model stack (RK_RUNNER_STACK: public |
+	// internal). Empty is a runner built before the registry: Demucs only,
+	// no recipe list sent, treated as internal by the server.
+	Stack string
+	// ModelsDir holds the pinned weights (RK_MODELS_DIR, default /models);
+	// every file is verified against the manifest at startup.
+	ModelsDir string
+	// Manifest is internal/models/manifest.json as shipped in the image,
+	// read by the separation script (RK_MODELS_MANIFEST).
+	Manifest string
+	// SeparateScript is tools/separate/separate.py (RK_SEPARATE_TOOL).
+	SeparateScript string
+	// EgressDir holds the sitecustomize egress lock (tools/egress,
+	// RK_EGRESS_DIR). When set, every Python child runs with outbound
+	// network blocked: no library can fetch weights during inference.
+	EgressDir string
 }
 
 // Agent runs the lease loop.
 type Agent struct {
 	cfg  Config
 	http *http.Client
+	// recipes the runner verified at startup (sorted); nil for a legacy runner.
+	recipes []string
 }
 
 // New builds an agent.
@@ -109,14 +131,85 @@ func New(cfg Config) (*Agent, error) {
 			cfg.Transcribe.SectionsTimeout = 10 * time.Minute
 		}
 	}
-	return &Agent{cfg: cfg, http: &http.Client{}}, nil
+	a := &Agent{cfg: cfg, http: &http.Client{}}
+	if cfg.Stack != "" {
+		if cfg.ModelsDir == "" {
+			cfg.ModelsDir = "/models"
+		}
+		if cfg.Stack != models.Internal && cfg.Transcribe.Enabled {
+			return nil, errors.New("transcription runs internal-only adapters; RK_TRANSCRIBE needs RK_RUNNER_STACK=internal")
+		}
+		inv, err := models.Scan(cfg.ModelsDir, cfg.Stack)
+		if err != nil {
+			return nil, err
+		}
+		if len(inv.Recipes) == 0 {
+			return nil, fmt.Errorf("no separation recipe has all its weights under %s", cfg.ModelsDir)
+		}
+		a.cfg, a.recipes = cfg, inv.Recipes
+	}
+	return a, nil
+}
+
+// runnerStack is the stack the runner's weights belong to.
+func (a *Agent) runnerStack() string {
+	if a.cfg.Stack == "" {
+		return models.Internal // pre-registry image: Demucs weights only
+	}
+	return a.cfg.Stack
+}
+
+// childEnv is the extra environment of every Python child: the egress lock.
+func (a *Agent) childEnv() []string {
+	if a.cfg.EgressDir == "" {
+		return nil
+	}
+	pp := a.cfg.EgressDir
+	if cur := os.Getenv("PYTHONPATH"); cur != "" {
+		pp += string(os.PathListSeparator) + cur
+	}
+	return []string{"RK_EGRESS_LOCK=1", "PYTHONPATH=" + pp, "HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1"}
+}
+
+// checkLease is the runner-side lock of the entitlement invariant: before
+// anything is downloaded or loaded, the recipe must be one this runner
+// verified, and its weights must be allowed for the job's stack and for
+// the runner's own stack.
+func (a *Agent) checkLease(lease gpu.LeaseResponse) (models.Recipe, error) {
+	jobStack := lease.Stack
+	if jobStack == "" {
+		jobStack = models.Internal // a pre-registry server only has Demucs jobs
+	}
+	rc, err := models.Check(lease.Model, jobStack, a.runnerStack())
+	if err != nil {
+		return models.Recipe{}, err
+	}
+	if a.recipes != nil && !slices.Contains(a.recipes, rc.ID) {
+		return models.Recipe{}, fmt.Errorf("recipe %s is not installed on this runner (have %v)", rc.ID, a.recipes)
+	}
+	if a.recipes == nil && rc.Engine != models.EngineDemucs {
+		return models.Recipe{}, fmt.Errorf("recipe %s needs a runner image with the model registry", rc.ID)
+	}
+	if lease.Transcribe && jobStack != models.Internal {
+		return models.Recipe{}, errors.New("transcription on a public job")
+	}
+	return rc, nil
 }
 
 // Run loops until ctx is cancelled (or after one job with Once).
 func (a *Agent) Run(ctx context.Context) error {
-	slog.Info("rk gpu-agent", "api", a.cfg.APIURL, "runner", a.cfg.RunnerID, "device", a.cfg.Device, "once", a.cfg.Once, "signed_url_base", a.cfg.SignedURLBase)
-	if err := demucs.Check(ctx, a.cfg.Python); err != nil {
-		return err
+	slog.Info("rk gpu-agent", "api", a.cfg.APIURL, "runner", a.cfg.RunnerID, "device", a.cfg.Device, "once", a.cfg.Once,
+		"signed_url_base", a.cfg.SignedURLBase, "stack", a.runnerStack(), "recipes", a.recipes, "egress_lock", a.cfg.EgressDir != "")
+	needDemucs := a.recipes == nil
+	for _, id := range a.recipes {
+		if rc, _ := models.Lookup(id); rc.Engine == models.EngineDemucs {
+			needDemucs = true
+		}
+	}
+	if needDemucs {
+		if err := demucs.Check(ctx, a.cfg.Python); err != nil {
+			return err
+		}
 	}
 	for ctx.Err() == nil {
 		ran, err := a.RunOnce(ctx)
@@ -258,9 +351,13 @@ func (a *Agent) postH(ctx context.Context, path string, body, out any, headers m
 // RunOnce leases and processes one job. Returns false when none waits.
 func (a *Agent) RunOnce(ctx context.Context) (bool, error) {
 	var lease gpu.LeaseResponse
-	var headers map[string]string
+	headers := map[string]string{}
 	if a.cfg.Transcribe.Enabled {
-		headers = map[string]string{gpu.FeaturesHeader: gpu.FeatureTranscribe}
+		headers[gpu.FeaturesHeader] = gpu.FeatureTranscribe
+	}
+	if a.recipes != nil {
+		headers[gpu.RecipesHeader] = strings.Join(a.recipes, ",")
+		headers[gpu.StackHeader] = a.cfg.Stack
 	}
 	status, err := a.postH(ctx, "/api/v1/gpu/lease", map[string]string{"runner_id": a.cfg.RunnerID}, &lease, headers)
 	if err != nil {
@@ -277,9 +374,12 @@ func (a *Agent) RunOnce(ctx context.Context) (bool, error) {
 		// The server only offers these to runners that asked for them.
 		return true, errors.New("server offered a transcribe lease to a runner without the capability")
 	}
-	log.Info("leased job", "stems", lease.Stems, "expires_at", lease.ExpiresAt, "transcribe", lease.Transcribe)
+	log.Info("leased job", "stems", lease.Stems, "stack", lease.Stack, "expires_at", lease.ExpiresAt, "transcribe", lease.Transcribe)
 	start := time.Now()
-	err = a.process(ctx, lease, log)
+	rc, err := a.checkLease(lease)
+	if err == nil {
+		err = a.process(ctx, lease, rc, log)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			// Shutting down: let the lease expire so another runner takes it.
@@ -308,7 +408,7 @@ func truncate(s string, n int) string {
 // errJobGone is raised when the server says the job is no longer ours.
 var errJobGone = errors.New("job is no longer waiting for separation")
 
-func (a *Agent) process(ctx context.Context, lease gpu.LeaseResponse, log *slog.Logger) error {
+func (a *Agent) process(ctx context.Context, lease gpu.LeaseResponse, rc models.Recipe, log *slog.Logger) error {
 	work := filepath.Join(a.cfg.WorkDir, lease.JobID)
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
@@ -391,20 +491,37 @@ func (a *Agent) process(ctx context.Context, lease gpu.LeaseResponse, log *slog.
 	// 2. Separate.
 	sepStart := time.Now()
 	lastLogged := -1
-	out, err := demucs.Run(wctx, demucs.Options{
-		Python: a.cfg.Python, Model: lease.Model, Device: a.cfg.Device, Input: src,
-		OutDir: filepath.Join(work, "out"), Extra: a.cfg.DemucsExtra,
-	}, func(p float64) {
+	onProgress := func(p float64) {
 		progress.Store(int64((0.05 + band.sep*p) * 1000))
 		if step := int(p * 10); step > lastLogged {
 			lastLogged = step
-			log.Info("demucs progress", "pct", step*10, "elapsed", time.Since(sepStart).Round(time.Second))
+			log.Info("separation progress", "pct", step*10, "elapsed", time.Since(sepStart).Round(time.Second))
 		}
-	})
+	}
+	out := filepath.Join(work, "out")
+	var err error
+	switch rc.Engine {
+	case models.EngineDemucs:
+		out, err = demucs.Run(wctx, demucs.Options{
+			Python: a.cfg.Python, Model: rc.ID, Device: a.cfg.Device, Input: src,
+			OutDir: out, Extra: a.cfg.DemucsExtra, Env: a.childEnv(),
+		}, onProgress)
+	case models.EngineMSST:
+		jobStack := lease.Stack
+		if jobStack == "" {
+			jobStack = models.Internal
+		}
+		err = separate.Run(wctx, separate.Options{
+			Python: a.cfg.Python, Script: a.cfg.SeparateScript, Manifest: a.cfg.Manifest, ModelsDir: a.cfg.ModelsDir,
+			Recipe: rc.ID, Stack: jobStack, Device: a.cfg.Device, Input: src, OutDir: out, Env: a.childEnv(),
+		}, onProgress)
+	default:
+		err = fmt.Errorf("recipe %s: unknown engine %s", rc.ID, rc.Engine)
+	}
 	if err != nil {
 		return wrap(err)
 	}
-	log.Info("demucs finished", "took", time.Since(sepStart).Round(time.Second))
+	log.Info("separation finished", "recipe", rc.ID, "took", time.Since(sepStart).Round(time.Second))
 	progress.Store(int64((0.05 + band.sep) * 1000))
 
 	// 3. FLAC → 24-bit/48 kHz WAV.

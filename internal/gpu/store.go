@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/BeFeast/RehearseKit/internal/jobs"
+	"github.com/BeFeast/RehearseKit/internal/models"
 )
 
 // Lease states (CHECK constraint in gpu_leases).
@@ -98,6 +99,10 @@ func (s *Store) Failures(ctx context.Context, jobID string) (int, error) {
 	return n, err
 }
 
+// jobModelSQL is a job's recipe id; rows written before the registry have
+// no model and ran Demucs by quality (jobs.LegacyModel).
+const jobModelSQL = `coalesce(j.model, CASE j.quality WHEN 'high' THEN 'htdemucs_ft' WHEN 'high6' THEN 'htdemucs_6s' ELSE 'htdemucs' END)`
+
 // Claim leases the oldest job that is in `separating`, has no active lease
 // and has not exhausted its attempts. Concurrent runners never get the
 // same job: the jobs row is taken FOR UPDATE SKIP LOCKED and the partial
@@ -105,6 +110,7 @@ func (s *Store) Failures(ctx context.Context, jobID string) (int, error) {
 // (the NOT EXISTS check alone is not re-evaluated after a lock wait), in
 // which case the claim is retried. Returns ErrNoJobs when nothing waits.
 func (s *Store) Claim(ctx context.Context, runnerID string, caps Capabilities) (*Lease, *jobs.Job, error) {
+	caps = caps.normalized()
 	var (
 		l     *Lease
 		jobID string
@@ -133,7 +139,10 @@ func (s *Store) Claim(ctx context.Context, runnerID string, caps Capabilities) (
 }
 
 // A transcribe job is only offered to a runner that advertises the
-// capability, so an older runner never leases work it cannot finish.
+// capability, and a job only to a runner whose verified recipes include
+// the job's, so a runner never leases work it cannot finish. A public
+// runner never gets an internal job (it could not have its recipe anyway;
+// the stack test is the second lock).
 func (s *Store) tryClaim(ctx context.Context, runnerID string, caps Capabilities) (*Lease, string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -144,10 +153,12 @@ func (s *Store) tryClaim(ctx context.Context, runnerID string, caps Capabilities
 	err = tx.QueryRow(ctx, `SELECT j.id FROM jobs j
 		WHERE j.status = 'separating'
 		  AND (NOT j.transcribe OR $2)
+		  AND `+jobModelSQL+` = ANY($3::text[])
+		  AND (j.stack = 'public' OR $4)
 		  AND NOT EXISTS (SELECT 1 FROM gpu_leases l WHERE l.job_id = j.id AND l.state = 'active')
 		  AND (SELECT count(*) FROM gpu_leases l WHERE l.job_id = j.id AND l.state IN ('failed', 'expired')) < $1
 		ORDER BY j.started_at NULLS LAST, j.created_at, j.id
-		FOR UPDATE OF j SKIP LOCKED LIMIT 1`, s.MaxFailures, caps.Transcribe).Scan(&jobID)
+		FOR UPDATE OF j SKIP LOCKED LIMIT 1`, s.MaxFailures, caps.Transcribe, caps.Recipes, caps.Stack == models.Internal).Scan(&jobID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, "", ErrNoJobs
 	}
@@ -250,7 +261,7 @@ func (s *Store) Complete(ctx context.Context, leaseID, runnerID string, reported
 		_ = s.close(ctx, leaseID, StateFailed)
 		return ErrJobGone
 	}
-	_, want := jobs.ModelFor(j.Quality)
+	want := j.Recipe().Stems()
 	got := map[string]StemReport{}
 	for _, st := range reported {
 		got[st.Name] = st

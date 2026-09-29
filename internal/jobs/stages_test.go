@@ -50,20 +50,20 @@ func TestStatusCopyMatchesLegacy(t *testing.T) {
 		StatusMessage(StatusSeparating, 70) != "Finalizing stem separation..." {
 		t.Error("separating messages")
 	}
-	if StatusDetails(StatusSeparating) != "Using Demucs AI to separate vocals, drums, bass, and other instruments" || StatusDetails("x") != "" {
+	if StatusDetails(StatusSeparating) != "Separating vocals, drums, bass, and other instruments" || StatusDetails("x") != "" {
 		t.Error("details")
 	}
 }
 
-func TestModelFor(t *testing.T) {
-	m, s := ModelFor(QualityHigh6)
-	if m != "htdemucs_6s" || len(s) != 6 || s[4] != "guitar" || s[5] != "piano" {
-		t.Fatalf("%s %v", m, s)
+func TestJobRecipeLegacyRows(t *testing.T) {
+	for q, want := range map[string]string{QualityFast: "htdemucs", QualityHigh: "htdemucs_ft", QualityHigh6: "htdemucs_6s", "garbage": "htdemucs"} {
+		j := &Job{Quality: q}
+		if r := j.Recipe(); r.ID != want {
+			t.Errorf("legacy row %s → %s, want %s", q, r.ID, want)
+		}
 	}
-	if m, s := ModelFor(QualityHigh); m != "htdemucs_ft" || len(s) != 4 {
-		t.Fatalf("%s %v", m, s)
-	}
-	if m, _ := ModelFor("garbage"); m != "htdemucs" {
-		t.Fatal(m)
+	j := &Job{Quality: QualityHiFi, Stack: "public", Model: "kim+scnet_xl_ihf"}
+	if r := j.Recipe(); r.ID != "kim+scnet_xl_ihf" || len(r.Stems()) != 4 {
+		t.Errorf("recipe = %+v", r)
 	}
 }

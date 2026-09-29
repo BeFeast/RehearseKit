@@ -224,7 +224,7 @@ func (a *Agent) runAdapter(ctx context.Context, timeout time.Duration, log *slog
 	defer cancel()
 	cmd := exec.CommandContext(ctx, a.cfg.Python, append([]string{path}, args...)...)
 	cmd.WaitDelay = 5 * time.Second
-	cmd.Env = append(append(os.Environ(), "PYTHONUNBUFFERED=1"), a.cfg.Transcribe.Env...)
+	cmd.Env = append(append(append(os.Environ(), "PYTHONUNBUFFERED=1"), a.cfg.Transcribe.Env...), a.childEnv()...)
 	var stderr strings.Builder
 	cmd.Stderr = &tailWriter{b: &stderr, max: 4000}
 	cmd.Stdout = cmd.Stderr

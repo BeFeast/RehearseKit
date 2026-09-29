@@ -16,6 +16,7 @@ import (
 
 	"github.com/BeFeast/RehearseKit/internal/api/respond"
 	"github.com/BeFeast/RehearseKit/internal/auth"
+	"github.com/BeFeast/RehearseKit/internal/models"
 	"github.com/BeFeast/RehearseKit/internal/storage"
 )
 
@@ -27,6 +28,9 @@ type Options struct {
 	// TranscribeAllowed reports whether a signed-in email may set
 	// transcribe=1; nil disables the option for everyone.
 	TranscribeAllowed func(email string) bool
+	// StackFor returns the model stack of a signed-in email; nil (and
+	// every anonymous upload) means models.Public.
+	StackFor func(email string) string
 }
 
 // Handlers serves /api/v1/jobs*.
@@ -169,30 +173,41 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 		respond.Failf(w, http.StatusBadRequest, "empty_file", "the uploaded file is empty")
 		return
 	}
+	u := auth.UserFrom(r.Context())
+	stack := models.Public
+	if u != nil && h.opts.StackFor != nil {
+		stack = h.opts.StackFor(u.Email)
+	}
 	quality := fields["quality"]
 	if quality == "" {
-		quality = QualityFast
+		quality = QualityHigh
 	}
 	if !ValidQuality(quality) {
 		cleanup()
-		respond.Failf(w, http.StatusBadRequest, "invalid_quality", "quality must be one of fast, high, high6")
+		respond.Failf(w, http.StatusBadRequest, "invalid_quality", "quality must be one of "+strings.Join(models.Qualities(stack), ", "))
 		return
 	}
-	p := CreateParams{Quality: quality}
-	if t := fields["transcribe"]; t == "1" || strings.EqualFold(t, "true") {
-		u := auth.UserFrom(r.Context())
-		if u == nil || h.opts.TranscribeAllowed == nil || !h.opts.TranscribeAllowed(u.Email) {
-			cleanup()
-			respond.Failf(w, http.StatusForbidden, "transcribe_not_allowed", "transcription is not enabled for this account")
-			return
-		}
-		if quality != QualityHigh6 {
-			cleanup()
-			respond.Failf(w, http.StatusBadRequest, "transcribe_requires_high6", "transcription needs the high6 quality (guitar and piano stems)")
-			return
-		}
-		p.Transcribe = true
+	transcribe := fields["transcribe"] == "1" || strings.EqualFold(fields["transcribe"], "true")
+	// Transcription runs research-licensed adapters, so it stays on the
+	// internal stack whatever the allowlist says.
+	if transcribe && (u == nil || h.opts.TranscribeAllowed == nil || !h.opts.TranscribeAllowed(u.Email) || stack != models.Internal) {
+		cleanup()
+		respond.Failf(w, http.StatusForbidden, "transcribe_not_allowed", "transcription is not enabled for this account")
+		return
 	}
+	recipe, ok := models.RecipeFor(stack, quality)
+	if !ok {
+		cleanup()
+		respond.Failf(w, http.StatusForbidden, "quality_not_available",
+			fmt.Sprintf("quality %s is not available; choose one of %s", quality, strings.Join(models.Qualities(stack), ", ")))
+		return
+	}
+	if transcribe && recipe.StemCount != 6 {
+		cleanup()
+		respond.Failf(w, http.StatusBadRequest, "transcribe_requires_high6", "transcription needs a 6-stem quality (guitar and piano stems)")
+		return
+	}
+	p := CreateParams{Quality: quality, Stack: stack, Model: recipe.ID, Transcribe: transcribe}
 	if gotFile {
 		p.InputType = InputUpload
 		p.SourceFilename = &filename
@@ -216,7 +231,7 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 	p.ProjectName = clampText(p.ProjectName, 200)
 
 	var claimToken string
-	if u := auth.UserFrom(r.Context()); u != nil {
+	if u != nil {
 		p.OwnerID = &u.ID
 		p.ExpiresAt = time.Now().Add(h.opts.UserRetention)
 	} else {

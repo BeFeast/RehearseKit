@@ -3,6 +3,8 @@ package gpu
 import (
 	"context"
 	"time"
+
+	"github.com/BeFeast/RehearseKit/internal/models"
 )
 
 // QueueStats is what an autoscaler needs to decide whether a GPU should be
@@ -17,6 +19,9 @@ type QueueStats struct {
 	// WaitingTranscribe counts the waiting jobs that need a transcribe-capable
 	// runner (a subset of Waiting).
 	WaitingTranscribe int `json:"waiting_transcribe"`
+	// WaitingInternal counts the waiting jobs whose recipe loads internal
+	// weights, i.e. that only the internal runner image can take.
+	WaitingInternal int `json:"waiting_internal"`
 	// OldestWaitingAt is when the oldest waiting job entered the queue
 	// (its started_at, or created_at); nil when nothing waits.
 	OldestWaitingAt *time.Time `json:"oldest_waiting_at,omitempty"`
@@ -37,11 +42,24 @@ func (s *Store) QueueStats(ctx context.Context) (QueueStats, error) {
 		SELECT (SELECT count(*) FROM waiting),
 		       (SELECT min(since) FROM waiting),
 		       (SELECT count(*) FROM gpu_leases WHERE state = 'active'),
-		       (SELECT count(*) FROM waiting w JOIN jobs j ON j.id = w.id WHERE j.transcribe)`, s.MaxFailures).
-		Scan(&st.Waiting, &oldest, &st.ActiveLeases, &st.WaitingTranscribe)
+		       (SELECT count(*) FROM waiting w JOIN jobs j ON j.id = w.id WHERE j.transcribe),
+		       (SELECT count(*) FROM waiting w JOIN jobs j ON j.id = w.id WHERE NOT (`+jobModelSQL+` = ANY($2::text[])))`,
+		s.MaxFailures, publicRecipes()).
+		Scan(&st.Waiting, &oldest, &st.ActiveLeases, &st.WaitingTranscribe, &st.WaitingInternal)
 	if err != nil {
 		return QueueStats{}, err
 	}
 	st.OldestWaitingAt = oldest
 	return st, nil
+}
+
+// publicRecipes lists the recipes a public runner may run.
+func publicRecipes() []string {
+	var out []string
+	for _, r := range models.Recipes() {
+		if r.Class() == models.Public {
+			out = append(out, r.ID)
+		}
+	}
+	return out
 }

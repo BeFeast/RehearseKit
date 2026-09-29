@@ -5,6 +5,8 @@ package jobs
 
 import (
 	"time"
+
+	"github.com/BeFeast/RehearseKit/internal/models"
 )
 
 // Job statuses (CHECK constraint in the jobs table).
@@ -26,15 +28,18 @@ const (
 	InputYouTube = "youtube"
 )
 
-// Quality presets; the Demucs model each maps to is chosen by the worker.
+// Quality presets. The recipe each maps to depends on the job's stack
+// (internal/models/manifest.json): public offers high and hifi (4 stems),
+// internal offers all four with Demucs for fast/high/high6 and 6-stem hifi.
 const (
-	QualityFast  = "fast"  // htdemucs, 4 stems
-	QualityHigh  = "high"  // htdemucs_ft, 4 stems
-	QualityHigh6 = "high6" // htdemucs_6s, 6 stems (+guitar, +piano)
+	QualityFast  = "fast"
+	QualityHigh  = "high"
+	QualityHigh6 = "high6"
+	QualityHiFi  = "hifi"
 )
 
 // Qualities lists the accepted quality values in display order.
-var Qualities = []string{QualityFast, QualityHigh, QualityHigh6}
+var Qualities = []string{QualityFast, QualityHigh, QualityHigh6, QualityHiFi}
 
 // ValidQuality reports whether q is an accepted preset.
 func ValidQuality(q string) bool {
@@ -63,13 +68,17 @@ func ValidStatus(s string) bool {
 
 // Job is a row of the jobs table plus its stems.
 type Job struct {
-	ID              string     `json:"id"`
-	OwnerID         *string    `json:"owner_id"`
-	ProjectName     string     `json:"project_name"`
-	InputType       string     `json:"input_type"`
-	InputURL        *string    `json:"input_url"`
-	SourceFilename  *string    `json:"source_filename"`
-	Quality         string     `json:"quality"`
+	ID             string  `json:"id"`
+	OwnerID        *string `json:"owner_id"`
+	ProjectName    string  `json:"project_name"`
+	InputType      string  `json:"input_type"`
+	InputURL       *string `json:"input_url"`
+	SourceFilename *string `json:"source_filename"`
+	Quality        string  `json:"quality"`
+	// Stack is the entitlement the job was created under (public |
+	// internal); Model is the separation recipe it runs.
+	Stack           string     `json:"stack"`
+	Model           string     `json:"model"`
 	Transcribe      bool       `json:"transcribe"`
 	Status          string     `json:"status"`
 	StageProgress   int16      `json:"stage_progress"`
@@ -89,6 +98,27 @@ type Job struct {
 	ClaimToken string `json:"claim_token,omitempty"`
 
 	claimTokenHash []byte
+}
+
+// Recipe returns the separation recipe of the job. A row written by a
+// server that predates the registry has no model; it ran Demucs by quality.
+func (j *Job) Recipe() models.Recipe {
+	if r, ok := models.Lookup(j.Model); ok {
+		return r
+	}
+	r, _ := models.Lookup(LegacyModel(j.Quality))
+	return r
+}
+
+// LegacyModel is the Demucs model the pre-registry server used per quality.
+func LegacyModel(quality string) string {
+	switch quality {
+	case QualityHigh:
+		return "htdemucs_ft"
+	case QualityHigh6:
+		return "htdemucs_6s"
+	}
+	return "htdemucs"
 }
 
 // IsAnonymous reports whether the job has no owner yet.

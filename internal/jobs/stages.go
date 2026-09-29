@@ -107,7 +107,7 @@ func StatusDetails(status string) string {
 	case StatusAnalyzing:
 		return "Using librosa to detect tempo and beats"
 	case StatusSeparating:
-		return "Using Demucs AI to separate vocals, drums, bass, and other instruments"
+		return "Separating vocals, drums, bass, and other instruments"
 	case StatusFinalizing:
 		return "Adding tempo information to each stem file"
 	case StatusPackaging:
@@ -116,24 +116,6 @@ func StatusDetails(status string) string {
 	return ""
 }
 
-// FourStems and SixStems are the Demucs output names per model family.
-var (
-	FourStems = []string{"vocals", "drums", "bass", "other"}
-	SixStems  = []string{"vocals", "drums", "bass", "other", "guitar", "piano"}
-)
-
 // TranscribeStems are the stems a transcribe job gets note tracks for
-// (all present in the high6 model).
+// (all present in the 6-stem recipes).
 var TranscribeStems = []string{"drums", "bass", "guitar", "piano"}
-
-// ModelFor maps a quality preset to its Demucs model and stem names.
-func ModelFor(quality string) (model string, stems []string) {
-	switch quality {
-	case QualityHigh:
-		return "htdemucs_ft", FourStems
-	case QualityHigh6:
-		return "htdemucs_6s", SixStems
-	default:
-		return "htdemucs", FourStems
-	}
-}
