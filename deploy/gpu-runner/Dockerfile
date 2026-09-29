@@ -87,6 +87,10 @@ COPY deploy/gpu-runner/requirements-transcribe.txt /tmp/requirements-transcribe.
 RUN pip install --no-cache-dir -r /tmp/requirements-transcribe.txt \
  && python -c "import demucs, torch, beat_this, muscriptor, adtof_pytorch, hf_midi_transcription; print('transcription stack ok, torch', torch.__version__)"
 
+# hf_midi_transcription pulls piano_transcription_inference from git without a ref; the build
+# fails if that dependency resolves to anything but the commit reviewed here.
+RUN python -c "import importlib.metadata as m, json; d = json.loads(m.distribution('piano-transcription-inference').read_text('direct_url.json')); c = d['vcs_info']['commit_id']; assert c == '7568dc7f78b625e40cf9776e2806d164006610e3', c; print('piano_transcription_inference pinned', c[:7])"
+
 RUN python /opt/rk/fetch_models.py --manifest /opt/rk/models.json --dest /models --stack internal
 
 # Optional gated MuScriptor weights from the build host (empty dir when absent).
