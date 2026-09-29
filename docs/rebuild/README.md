@@ -67,7 +67,8 @@ web/                            the SPA (Vite + React); web/dist is embedded, se
 | `RK_DEMUCS_DEVICE` | `cpu` (worker) / `cuda` (agent) | demucs `-d` |
 | `RK_GPU_WAIT_TIMEOUT` | `3h` | a job waiting in `separating` with no runner ever leasing it fails after this (counted by the worker from when it first saw the job unleased; a lease restarts the clock) |
 | `RK_WORKER_SLOTS` | `2` | jobs the worker runs through the CPU stages (converting, analyzing) at once; also `rk worker -slots N` |
-| `RK_TRANSCRIBE_EMAILS` | empty | comma-separated accounts (case-insensitive) allowed to create `transcribe=1` jobs (beat grid + per-stem MIDI, owner-only); empty disables the option |
+| `RK_TRANSCRIBE_EMAILS` | empty | comma-separated accounts (case-insensitive) allowed to create `transcribe=1` jobs (beat grid + per-stem MIDI, owner-only); empty disables the option. The account must also be internal (below): the adapters are research-licensed |
+| `RK_INTERNAL_EMAILS` | empty | comma-separated accounts (case-insensitive) on the **internal model stack**: owner and friends, never sold. Everyone else and every anonymous upload is on the public stack. See "Model stacks" |
 | `RK_SCALER_*` | see [GPU autoscaler](#gpu-autoscaler-rk-gpu-scaler) | `rk gpu-scaler` policy, image, tunnel and state (runs on the vast.ai-facing host, not the server) |
 
 ## Run locally
@@ -203,6 +204,45 @@ the server (additive migration, `transcribe` default false), then
 `RK_TRANSCRIBE_EMAILS` in the server env — while the live autoscaler still
 runs `:latest`, keep the list empty, or it would rent a runner that cannot
 claim the waiting transcribe job.
+
+### Model stacks (#35)
+
+Every job is created on a stack, and the stack decides which separation recipe each quality
+runs. The mapping, the pinned checkpoints (URL, size, sha256) and each checkpoint's licence class
+live in `internal/models/manifest.json`. The Go server and agent embed that file, and the runner
+image build reads it.
+
+| quality | public (default) | internal (`RK_INTERNAL_EMAILS`) |
+|---|---|---|
+| `fast` | not offered (403 `quality_not_available`) | `htdemucs`, 4 stems |
+| `high` (default) | `scnet_xl_ihf`, 4 stems | `htdemucs_ft`, 4 stems |
+| `high6` | not offered | `htdemucs_6s`, 6 stems |
+| `hifi` | `kim+scnet_xl_ihf`, 4 stems (Plus HiFi) | `kim+bs_rofo_sw`, 6 stems |
+
+The invariant is that a public job never loads a non-public checkpoint. Five places enforce it:
+
+1. `models` validates at load that the public stack maps only to public-class recipes.
+2. The create handler asks the registry for the job's recipe; `jobs.stack` and `jobs.model` are
+   stored on the row.
+3. The database constraint `jobs_public_model_check` refuses Demucs and SW recipes on a public row.
+4. At the claim, a runner only gets jobs whose recipe is in its verified `X-Runner-Recipes`, and
+   never an internal job unless it sends `X-Runner-Stack: internal`.
+5. The agent re-checks each lease against the job's and its own stack before loading anything.
+   It also refuses to start if a public image contains internal weights.
+
+Transcription stays internal-only. It needs a 6-stem recipe (`high6` or internal `hifi`).
+`/api/v1/config` lists the qualities of the caller's stack. `/auth/me` features include
+`"internal"` for internal accounts.
+
+Rollout order for the stacks:
+
+1. Build and push both runner images (`--target public`, `--target internal`).
+2. Deploy the server. Migration `0004` is additive and marks existing jobs `internal`. A
+   pre-registry runner still gets Demucs jobs, reported as internal.
+3. Set `RK_INTERNAL_EMAILS` (and keep the owner in it, or transcription stops).
+4. Point the scaler at the images: `RK_SCALER_IMAGE` = internal, `RK_SCALER_IMAGE_PUBLIC` = public.
+   While the scaler still runs a pre-registry image, public jobs wait: that runner advertises
+   only Demucs.
 
 Sweepers (in the worker process): expired GPU leases every 30 s, jobs stuck
 in a CPU stage with no event for 45 min every 5 min (→ failed), retention
@@ -517,7 +557,8 @@ Errors are always `{"code":"...","message":"..."}`. Notable codes:
 `claim_token_required` (403), `expired` (410 for an anonymous link past
 `expires_at`), `too_large` (413), `already_finished` (409 on cancel).
 `transcribe_not_allowed` (403: `transcribe=1` without a session or from an
-account outside `RK_TRANSCRIBE_EMAILS`), `transcribe_requires_high6` (400:
+account outside `RK_TRANSCRIBE_EMAILS` or not on the internal stack), `quality_not_available`
+(403: the account's stack does not offer that quality), `transcribe_requires_high6` (400:
 `transcribe=1` with another quality).
 
 ## Auth

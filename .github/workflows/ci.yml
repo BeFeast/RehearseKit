@@ -94,6 +94,10 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # Runner image guards (#35): manifest pinning/verification and the egress lock.
+      - name: Runner weights and egress tests
+        run: python3 -m unittest deploy/gpu-runner/test_fetch_models.py tools/egress/test_egress.py
+
   web-checks:
     name: Web typecheck and tests
     runs-on: ubuntu-latest
