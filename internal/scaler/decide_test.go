@@ -33,6 +33,9 @@ func TestDecide(t *testing.T) {
 		{"stale idle memory cleared without instance", Observation{Now: t0, QueueOK: true}, Memory{IdleSince: t0.Add(-time.Hour)}, ActNone, "", time.Time{}},
 
 		// With an instance.
+		{"public image, internal job waiting, no lease → make room", Observation{Now: t0, QueueOK: true, Waiting: 1, WaitingInternal: 1, HaveInstance: true, InstancePublic: true, RentedAt: t0.Add(-time.Minute), Listed: running}, Memory{}, ActDestroy, "public image cannot run", time.Time{}},
+		{"public image busy with a public lease keeps it", Observation{Now: t0, QueueOK: true, Waiting: 1, WaitingInternal: 1, ActiveLeases: 1, HaveInstance: true, InstancePublic: true, RentedAt: t0.Add(-time.Minute), Listed: running}, Memory{}, ActNone, "busy", time.Time{}},
+		{"internal image takes internal jobs", Observation{Now: t0, QueueOK: true, Waiting: 1, WaitingInternal: 1, HaveInstance: true, RentedAt: t0.Add(-time.Minute), Listed: running}, Memory{}, ActNone, "busy", time.Time{}},
 		{"instance vanished from vast", Observation{Now: t0, QueueOK: true, HaveInstance: true, RentedAt: t0.Add(-time.Minute)}, Memory{}, ActForget, "no longer listed", time.Time{}},
 		{"busy: waiting", Observation{Now: t0, QueueOK: true, Waiting: 1, HaveInstance: true, RentedAt: t0.Add(-time.Minute), Listed: running}, Memory{IdleSince: t0.Add(-time.Minute)}, ActNone, "busy", time.Time{}},
 		{"busy: active lease", Observation{Now: t0, QueueOK: true, ActiveLeases: 1, HaveInstance: true, RentedAt: t0.Add(-time.Minute), Listed: running}, Memory{}, ActNone, "busy", time.Time{}},

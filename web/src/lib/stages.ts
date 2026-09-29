@@ -18,7 +18,7 @@ export const STAGE_COPY: Record<Exclude<JobStatus, 'failed' | 'cancelled'>, Stag
   pending: { message: 'Waiting in the queue', detail: 'Processing starts as soon as a worker is free', endsAt: 0, lamp: -1 },
   converting: { message: 'Converting audio to WAV format...', detail: 'Converting to 24-bit/48kHz professional format', endsAt: 14, lamp: 0 },
   analyzing: { message: 'Analyzing tempo and detecting BPM...', detail: 'Using librosa to detect tempo and beats', endsAt: 28, lamp: 1 },
-  separating: { message: 'Separating stems with AI...', detail: 'Using Demucs AI to separate vocals, drums, bass, and other instruments', endsAt: 76, lamp: 2 },
+  separating: { message: 'Separating stems with AI...', detail: 'Separating vocals, drums, bass, and other instruments', endsAt: 76, lamp: 2 },
   finalizing: { message: 'Embedding metadata into stems...', detail: 'Adding tempo information to each stem file', endsAt: 89, lamp: 3 },
   packaging: { message: 'Creating download package...', detail: 'Bundling stems and creating DAWproject file', endsAt: 99, lamp: 4 },
   completed: { message: 'Processing complete', detail: 'Stems, DAWproject file and tempo map are ready', endsAt: 100, lamp: 5 },
@@ -110,33 +110,80 @@ export function qualityLabel(q: string): string {
     case 'fast':
       return 'Fast';
     case 'high':
-      return 'High quality';
+      return 'Standard';
     case 'high6':
-      return 'High quality + guitar/piano';
+      return 'Standard + guitar/piano';
+    case 'hifi':
+      return 'Plus HiFi';
     default:
       return q;
   }
 }
 
-/** Short badge form: FAST, HIGH QUALITY, HQ · 6 STEMS. */
+/** Short badge form: FAST, STANDARD, STD · 6 STEMS, PLUS HIFI. */
 export function qualityBadge(q: string): string {
   switch (q) {
     case 'fast':
       return 'FAST';
     case 'high':
-      return 'HIGH QUALITY';
+      return 'STANDARD';
     case 'high6':
-      return 'HQ · 6 STEMS';
+      return 'STD · 6 STEMS';
+    case 'hifi':
+      return 'PLUS HIFI';
     default:
       return q.toUpperCase();
   }
 }
 
-/** The mono caption under a strip name. */
-export function stemModelCaption(quality: string, stem: string): string {
+/**
+ * The separation recipe of a job: its model id, or the Demucs model an
+ * older server derived from the quality.
+ */
+export function jobModel(job: { quality: string; model?: string }): string {
+  if (job.model) return job.model;
+  return job.quality === 'high' ? 'htdemucs_ft' : job.quality === 'high6' ? 'htdemucs_6s' : 'htdemucs';
+}
+
+/** Human name of a separation recipe (matches internal/models/manifest.json labels). */
+export function modelName(model: string): string {
+  switch (model) {
+    case 'htdemucs':
+      return 'Demucs HT';
+    case 'htdemucs_ft':
+      return 'Demucs HT fine-tuned';
+    case 'htdemucs_6s':
+      return 'Demucs HT 6s';
+    case 'scnet_xl_ihf':
+      return 'SCNet XL';
+    case 'kim+scnet_xl_ihf':
+      return 'RoFormer vocals + SCNet XL';
+    case 'kim+bs_rofo_sw':
+      return 'RoFormer vocals + BS-RoFormer SW';
+    default:
+      return model;
+  }
+}
+
+/** The mono caption under a strip name: which model made this stem. */
+export function stemModelCaption(model: string, stem: string): string {
   if (stem === 'other') return 'GTR / KEYS';
-  if (stem === 'guitar' || stem === 'piano') return 'DEMUCS 6S';
-  return quality === 'fast' ? 'DEMUCS' : 'DEMUCS HT';
+  if (model.startsWith('kim+') && stem === 'vocals') return 'ROFORMER';
+  switch (model) {
+    case 'htdemucs':
+      return 'DEMUCS';
+    case 'htdemucs_ft':
+      return 'DEMUCS HT';
+    case 'htdemucs_6s':
+      return 'DEMUCS 6S';
+    case 'scnet_xl_ihf':
+    case 'kim+scnet_xl_ihf':
+      return 'SCNET XL';
+    case 'kim+bs_rofo_sw':
+      return 'BS-ROFORMER';
+    default:
+      return model.toUpperCase();
+  }
 }
 
 /** Which stage a failed or cancelled job stopped at, spelled for prose. */

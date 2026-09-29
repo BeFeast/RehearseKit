@@ -110,6 +110,9 @@ type LeaseResponse struct {
 	UploadURLs       map[string]string `json:"upload_urls"`
 	ExpiresAt        time.Time         `json:"expires_at"`
 	HeartbeatSeconds int               `json:"heartbeat_seconds"`
+	// Stack is the job's entitlement; the runner refuses a recipe whose
+	// weights that stack may not load (models.Check).
+	Stack string `json:"stack,omitempty"`
 	// Transcribe and ArtifactURLs are present only on transcribe leases
 	// (offered to runners that sent X-Runner-Features: transcribe).
 	Transcribe   bool          `json:"transcribe,omitempty"`
@@ -127,7 +130,7 @@ func (h *Handlers) lease(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rid := runnerID(r, body.RunnerID)
-	caps := ParseFeatures(r.Header.Get(FeaturesHeader))
+	caps := ParseRunner(r.Header.Get(FeaturesHeader), r.Header.Get(RecipesHeader), r.Header.Get(StackHeader))
 	l, j, err := h.store.Claim(r.Context(), rid, caps)
 	if errors.Is(err, ErrNoJobs) {
 		w.WriteHeader(http.StatusNoContent)
@@ -137,7 +140,8 @@ func (h *Handlers) lease(w http.ResponseWriter, r *http.Request) {
 		respond.Fail(w, err)
 		return
 	}
-	model, stems := jobs.ModelFor(j.Quality)
+	recipe := j.Recipe()
+	model, stems := recipe.ID, recipe.Stems()
 	exp := time.Now().Add(h.opts.SignedURLTTL)
 	base := h.baseURL(r)
 	src, err := h.signer.Sign(http.MethodGet, signed.SourcePath(j.ID), exp)
@@ -146,7 +150,7 @@ func (h *Handlers) lease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := LeaseResponse{
-		LeaseID: l.ID, JobID: j.ID, Model: model, Stems: stems,
+		LeaseID: l.ID, JobID: j.ID, Model: model, Stems: stems, Stack: j.Stack,
 		SourceURL: base + src, UploadURLs: map[string]string{}, ExpiresAt: l.ExpiresAt,
 		HeartbeatSeconds: heartbeatSeconds(h.store.TTL),
 	}
@@ -175,7 +179,7 @@ func (h *Handlers) lease(w http.ResponseWriter, r *http.Request) {
 			resp.ArtifactURLs.Notes[name] = base + u
 		}
 	}
-	slog.Info("gpu lease", "lease", l.ID, "job", j.ID, "runner", rid, "model", model, "transcribe", j.Transcribe)
+	slog.Info("gpu lease", "lease", l.ID, "job", j.ID, "runner", rid, "model", model, "stack", j.Stack, "transcribe", j.Transcribe)
 	respond.JSON(w, http.StatusOK, resp)
 }
 

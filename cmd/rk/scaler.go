@@ -28,7 +28,8 @@ func runGPUScaler(args []string) error {
 	bootTimeout := fs.Duration("boot-timeout", envDuration("RK_SCALER_BOOT_TIMEOUT", 15*time.Minute), "destroy an instance that is not running after this (or RK_SCALER_BOOT_TIMEOUT)")
 	cooldown := fs.Duration("rent-cooldown", envDuration("RK_SCALER_RENT_COOLDOWN", 2*time.Minute), "wait after a failed rent (or RK_SCALER_RENT_COOLDOWN)")
 	minCredit := fs.Float64("min-credit", envFloat("RK_SCALER_MIN_CREDIT", 5), "do not rent when the vast.ai credit is below this many dollars (or RK_SCALER_MIN_CREDIT)")
-	image := fs.String("image", envOr("RK_SCALER_IMAGE", "ghcr.io/kossoy/rk-gpu-runner:latest"), "runner image (or RK_SCALER_IMAGE)")
+	image := fs.String("image", envOr("RK_SCALER_IMAGE", "ghcr.io/kossoy/rk-gpu-runner:latest"), "runner image; the internal-stack image when --public-image is set (or RK_SCALER_IMAGE)")
+	publicImage := fs.String("public-image", os.Getenv("RK_SCALER_IMAGE_PUBLIC"), "public-stack runner image, rented while no waiting job needs internal weights (or RK_SCALER_IMAGE_PUBLIC)")
 	login := fs.String("docker-login", os.Getenv("RK_SCALER_DOCKER_LOGIN"), "vast --login string for the image registry (or RK_SCALER_DOCKER_LOGIN; default: derived from docker config.json)")
 	dockerConfig := fs.String("docker-config", os.Getenv("RK_SCALER_DOCKER_CONFIG"), "docker config.json to take the registry login from (or RK_SCALER_DOCKER_CONFIG; default ~/.docker/config.json)")
 	offerQuery := fs.String("offer-query", envOr("RK_SCALER_OFFER_QUERY", scaler.DefaultOfferQuery), "vastai search offers query (or RK_SCALER_OFFER_QUERY)")
@@ -113,7 +114,7 @@ func runGPUScaler(args []string) error {
 	s, err := scaler.New(scaler.Config{
 		Interval: *interval,
 		Limits:   scaler.Limits{Idle: *idle, MaxAge: *maxAge, BootTimeout: *bootTimeout, MinCredit: *minCredit, RentCooldown: *cooldown},
-		Image:    *image, Login: *login, OfferQuery: *offerQuery, DiskGB: *disk, Label: *label, RunnerEnv: *runnerEnv,
+		Image:    *image, PublicImage: *publicImage, Login: *login, OfferQuery: *offerQuery, DiskGB: *disk, Label: *label, RunnerEnv: *runnerEnv,
 		TunnelPort: *tunnelPort, Token: *token, StateDir: *stateDir,
 	}, &scaler.CLI{Bin: *vastBin, APIKey: *vastKey}, queue, tunnel)
 	if err != nil {

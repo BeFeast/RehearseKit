@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/BeFeast/RehearseKit/internal/jobs"
+	"github.com/BeFeast/RehearseKit/internal/models"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/analysis"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/dawproject"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/demucs"
@@ -63,8 +64,8 @@ func (w *Worker) newRun(j *jobs.Job) (*run, error) {
 	if err != nil {
 		return nil, err
 	}
-	model, stems := jobs.ModelFor(j.Quality)
-	return &run{w: w, job: j, dir: dir, model: model, stems: stems, log: slog.With("job", j.ID)}, nil
+	rc := j.Recipe()
+	return &run{w: w, job: j, dir: dir, model: rc.ID, stems: rc.Stems(), log: slog.With("job", j.ID)}, nil
 }
 
 func (r *run) sourceWAV() string { return filepath.Join(r.dir, "source.wav") }
@@ -305,6 +306,11 @@ func (r *run) separate(ctx context.Context) error {
 		// Local demucs has no adapters; finishing the job without
 		// analysis.json would silently drop the transcription.
 		return errors.New("Stem separation failed: transcription needs a GPU runner (RK_LOCAL_DEMUCS cannot transcribe)")
+	}
+	if rc := r.job.Recipe(); rc.Engine != models.EngineDemucs {
+		// Local mode is a CPU development aid with Demucs only; the other
+		// recipes need the runner image's pinned weights.
+		return fmt.Errorf("Stem separation failed: recipe %s needs a GPU runner (RK_LOCAL_DEMUCS runs Demucs only)", rc.ID)
 	}
 	return r.separateLocal(ctx)
 }
@@ -552,7 +558,7 @@ func (r *run) pack(ctx context.Context) error {
 	}
 	entries = append(entries,
 		pack.Entry{Name: "README.txt", Compress: true, Data: pack.Readme(pack.ReadmeParams{
-			ProjectName: r.job.ProjectName, BPM: r.tempo.BPM, Duration: r.info.Duration(), Stems: r.stems, Model: r.model,
+			ProjectName: r.job.ProjectName, BPM: r.tempo.BPM, Duration: r.info.Duration(), Stems: r.stems, Model: r.job.Recipe().Label, Credits: r.job.Recipe().Credits(),
 			Transcribe: r.summary,
 		})},
 	)

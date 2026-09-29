@@ -3,6 +3,8 @@ package gpu
 import (
 	"errors"
 	"strings"
+
+	"github.com/BeFeast/RehearseKit/internal/models"
 )
 
 // Runner ↔ server protocol additions for transcription. Everything here is
@@ -19,6 +21,15 @@ const FeaturesHeader = "X-Runner-Features"
 
 // FeatureTranscribe is the capability for beat grid + MIDI transcription.
 const FeatureTranscribe = "transcribe"
+
+// RecipesHeader lists the separation recipes (internal/models) whose
+// weights the runner verified at startup, comma-separated; StackHeader is
+// the runner image's stack (public | internal). A runner that sends neither
+// predates the registry: it runs the three Demucs presets and is internal.
+const (
+	RecipesHeader = "X-Runner-Recipes"
+	StackHeader   = "X-Runner-Stack"
+)
 
 // Heartbeat stages.
 const (
@@ -37,9 +48,36 @@ const (
 // verification).
 var ErrBadArtifacts = errors.New("gpu: artifacts do not match the job")
 
-// Capabilities are what a runner can do beyond separation.
+// Capabilities are what a runner can do.
 type Capabilities struct {
 	Transcribe bool
+	// Recipes the runner can separate with; Stack is its image's stack.
+	Recipes []string
+	Stack   string
+}
+
+// ParseRunner reads the capability headers of a lease request.
+func ParseRunner(features, recipes, stack string) Capabilities {
+	c := ParseFeatures(features)
+	for _, r := range strings.Split(recipes, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			c.Recipes = append(c.Recipes, r)
+		}
+	}
+	c.Stack = strings.TrimSpace(stack)
+	return c.normalized()
+}
+
+// normalized fills in a pre-registry runner (no recipes, no stack) and
+// maps an unknown stack to public (least privilege).
+func (c Capabilities) normalized() Capabilities {
+	if len(c.Recipes) == 0 && c.Stack == "" {
+		c.Recipes, c.Stack = models.LegacyRecipes, models.Internal
+	}
+	if !models.ValidStack(c.Stack) {
+		c.Stack = models.Public
+	}
+	return c
 }
 
 // ParseFeatures parses the FeaturesHeader value.

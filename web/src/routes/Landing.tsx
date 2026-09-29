@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppNavigate } from '../lib/use-app-navigate';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import * as api from '../api';
 import { ApiError, errorMessage } from '../api/client';
 import type { Quality, YouTubePreview } from '../api/types';
@@ -12,7 +13,7 @@ import { useToast } from '../components/Toast';
 import { AudioPreview, describeFile, validateFile, type FileInfo } from '../components/upload/AudioPreview';
 import { Dropzone } from '../components/upload/Dropzone';
 import { UrlPreviewCard, isYouTubeUrl } from '../components/upload/UrlPreviewCard';
-import { QualityPicker, qualityHelp } from '../components/upload/QualityPicker';
+import { DEFAULT_QUALITIES, QualityPicker, qualityHelp } from '../components/upload/QualityPicker';
 import { rememberClaim } from '../lib/claim-tokens';
 import { formatBytes, formatEta } from '../lib/format';
 
@@ -25,7 +26,9 @@ export function LandingRoute() {
   const navigate = useAppNavigate();
   const { user, openSignIn } = useAuth();
   const { toast } = useToast();
-  const config = useQuery({ queryKey: ['config'], queryFn: api.getConfig, staleTime: Infinity });
+  // The preset list depends on the account's model stack, so the cache is per user.
+  const config = useQuery({ queryKey: ['config', user?.id ?? 'anonymous'], queryFn: api.getConfig, staleTime: Infinity });
+  const qualities = config.data?.qualities?.length ? config.data.qualities : DEFAULT_QUALITIES;
   const maxBytes = config.data?.max_upload_bytes ?? ONE_GB;
   const anonHours = config.data?.anon_retention_hours ?? 24;
 
@@ -41,6 +44,10 @@ export function LandingRoute() {
   const [quality, setQuality] = useState<Quality>('high');
   const [transcribe, setTranscribe] = useState(false);
   const transcribeAvailable = user?.features?.includes('transcribe') ?? false;
+  // Signing out (or in) can change the offered presets; fall back to Standard.
+  useEffect(() => {
+    if (!qualities.some((q) => q.id === quality)) setQuality('high');
+  }, [qualities, quality]);
   const [upload, setUpload] = useState<{ loaded: number; total: number; startedAt: number } | null>(null);
   const [creating, setCreating] = useState(false);
   const abortRef = useRef<(() => void) | null>(null);
@@ -284,7 +291,7 @@ export function LandingRoute() {
                   maxLength={200}
                 />
               </div>
-              <QualityPicker quality={quality} onQuality={setQuality} transcribeAvailable={transcribeAvailable} transcribe={transcribe} onTranscribe={setTranscribe} />
+              <QualityPicker quality={quality} onQuality={setQuality} qualities={qualities} transcribeAvailable={transcribeAvailable} transcribe={transcribe} onTranscribe={setTranscribe} />
             </div>
 
             {mode === 'file' && file && <AudioPreview file={file} info={fileInfo} />}
@@ -292,7 +299,7 @@ export function LandingRoute() {
             <div className="rk-formfoot">
               <div className="rk-formfoot-help">
                 <span className="rk-help" id="qhelp" data-testid="quality-help">
-                  {qualityHelp(quality, transcribeAvailable && transcribe)}
+                  {qualityHelp(quality, transcribeAvailable && transcribe, qualities)}
                 </span>
                 <span className="rk-help">
                   {mode === 'url'
@@ -317,7 +324,7 @@ export function LandingRoute() {
           <div className="rk-feature">
             <Icon name="solo" size={20} />
             <h4>Stem Separation</h4>
-            <p>Vocals, drums, bass and other, separated with Demucs and delivered as individual WAV files.</p>
+            <p>Vocals, drums, bass and other as individual WAV files. Plus HiFi takes the vocals with a dedicated model first, then splits the band.</p>
           </div>
           <div className="rk-feature">
             <Icon name="metronome" size={20} />
@@ -330,6 +337,9 @@ export function LandingRoute() {
             <p>A DAWproject file alongside the stems: open the session in Bitwig, Studio One or Reaper with tracks already laid out.</p>
           </div>
         </div>
+        <p className="rk-help" style={{ marginTop: 'var(--rk-space-8)' }}>
+          <Link to="/credits">Models and licences</Link>
+        </p>
       </section>
     </main>
   );

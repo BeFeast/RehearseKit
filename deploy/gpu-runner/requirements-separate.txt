@@ -1,0 +1,17 @@
+# MSST inference subset for tools/separate (torch 2.2.0 / CUDA 12.1 / py3.10, both runner images).
+# MSST's own requirements.txt is for training: it pulls demucs and diffq (CC BY-NC), pedalboard
+# (GPL) and wxpython, none of which inference needs. The MSST code itself is cloned at a pinned
+# commit in the Dockerfile.
+numpy<2
+scipy<1.16
+soundfile>=0.12
+soxr
+librosa==0.11.0
+ml_collections==1.1.0
+omegaconf==2.3.0
+pyyaml
+packaging
+tqdm
+beartype==0.14.1
+einops>=0.7,<0.9
+rotary-embedding-torch<0.9

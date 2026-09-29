@@ -22,12 +22,17 @@ type Observation struct {
 	QueueOK      bool // Waiting and ActiveLeases are fresh
 	Waiting      int
 	ActiveLeases int
+	// WaitingInternal of Waiting need the internal runner image.
+	WaitingInternal int
 
 	// Our instance, if the state file has one.
 	HaveInstance bool
 	RentedAt     time.Time
 	// Listed is vast's view of that instance; nil when vast no longer lists it.
 	Listed *Instance
+	// InstancePublic: our instance runs the public image, which cannot take
+	// internal jobs.
+	InstancePublic bool
 
 	// Account credit, when it was fetched this tick.
 	CreditOK bool
@@ -114,6 +119,10 @@ func decideWithInstance(o Observation, m Memory, l Limits) Decision {
 	}
 	if !o.QueueOK {
 		return Decision{ActNone, "queue unknown; keeping the instance", m}
+	}
+	if o.InstancePublic && o.WaitingInternal > 0 && o.ActiveLeases == 0 {
+		// One instance at a time: make room for the internal image.
+		return Decision{ActDestroy, fmt.Sprintf("%d internal job(s) waiting; the public image cannot run them", o.WaitingInternal), m}
 	}
 	if o.Waiting > 0 || o.ActiveLeases > 0 {
 		m.IdleSince = time.Time{}

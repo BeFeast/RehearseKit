@@ -20,6 +20,7 @@ import (
 	"github.com/BeFeast/RehearseKit/internal/db/dbtest"
 	"github.com/BeFeast/RehearseKit/internal/gpu"
 	"github.com/BeFeast/RehearseKit/internal/jobs"
+	"github.com/BeFeast/RehearseKit/internal/models"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/media"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/peaks"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/wavcheck"
@@ -167,7 +168,7 @@ func (e *env) fakeRunner(jobID string) {
 	if _, err := e.gpu.Heartbeat(ctx, l.ID, "fake", 0.5, ""); err != nil {
 		e.t.Fatal(err)
 	}
-	_, stems := jobs.ModelFor(j.Quality)
+	stems := j.Recipe().Stems()
 	src := filepath.Join(filepath.Dir(mustStemPath(e, jobID, "vocals")), "..", "source.wav")
 	var reports []gpu.StemReport
 	for _, name := range stems {
@@ -364,7 +365,7 @@ func TestResumeFromFinalizing(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = os.WriteFile(filepath.Join(dir, "tempo.json"), []byte(`{"bpm": null, "confidence": 0.1}`), 0o644)
-	for _, name := range jobs.FourStems {
+	for _, name := range models.FourStems {
 		dst := mustStemPath(e, j.ID, name)
 		_ = os.MkdirAll(filepath.Dir(dst), 0o755)
 		if err := media.CopyFile(filepath.Join(dir, "source.wav"), dst); err != nil {
@@ -483,7 +484,7 @@ func (e *env) fakeRunnerAny() string {
 		e.t.Fatalf("fake runner claim: %v", err)
 	}
 	e.deliverStems(j.ID)
-	_, stems := jobs.ModelFor(j.Quality)
+	stems := j.Recipe().Stems()
 	var reports []gpu.StemReport
 	for _, name := range stems {
 		st, _ := os.Stat(mustStemPath(e, j.ID, name))
@@ -503,7 +504,7 @@ func (e *env) deliverStems(jobID string) {
 		e.t.Fatal(err)
 	}
 	dir, _ := e.layout.JobDir(jobID)
-	_, stems := jobs.ModelFor(j.Quality)
+	stems := j.Recipe().Stems()
 	for _, name := range stems {
 		dst := mustStemPath(e, jobID, name)
 		_ = os.MkdirAll(filepath.Dir(dst), 0o755)
@@ -741,7 +742,7 @@ func (e *env) fakeTranscribeRunner(jobID string, seconds float64) {
 	if j.ID != jobID || !j.Transcribe {
 		e.t.Fatalf("got job %+v", j)
 	}
-	_, stems := jobs.ModelFor(j.Quality)
+	stems := j.Recipe().Stems()
 	src := filepath.Join(filepath.Dir(mustStemPath(e, jobID, "vocals")), "..", "source.wav")
 	var reports []gpu.StemReport
 	for _, name := range stems {

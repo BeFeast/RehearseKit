@@ -23,12 +23,16 @@ type Config struct {
 	Interval time.Duration // tick; default 30 s
 	Limits   Limits
 
-	Image      string // runner image
-	Login      string // vast --login for a private registry
-	OfferQuery string // vastai search offers query
-	DiskGB     int
-	Label      string // label on instances we create; also how orphans are recognised
-	RunnerEnv  string // extra "-e K=V" for the runner container
+	Image string // runner image; the internal-stack image when PublicImage is set
+	// PublicImage, when set, is rented while no waiting job needs internal
+	// weights (gpu.QueueStats.WaitingInternal); it carries public weights
+	// only, so the image that lands on a third-party host has nothing else.
+	PublicImage string
+	Login       string // vast --login for a private registry
+	OfferQuery  string // vastai search offers query
+	DiskGB      int
+	Label       string // label on instances we create; also how orphans are recognised
+	RunnerEnv   string // extra "-e K=V" for the runner container
 
 	TunnelPort int    // port bound on the instance loopback; the runner's RK_API_URL
 	Token      string // RK_RUNNER_TOKEN handed to the runner
@@ -59,6 +63,8 @@ type StateInstance struct {
 	TunnelAt  time.Time `json:"tunnel_at,omitzero"`
 	FirstWork time.Time `json:"first_work_at,omitzero"`
 	Adopted   bool      `json:"adopted,omitempty"`
+	// Stack is the runner image's stack; empty = the internal image.
+	Stack string `json:"stack,omitempty"`
 }
 
 // Record is a finished instance kept for the log.
@@ -183,7 +189,7 @@ func (s *Scaler) State() State { return s.state }
 // instance is left running so a restart of the scaler reattaches to it.
 func (s *Scaler) Run(ctx context.Context) error {
 	s.log.Info("rk gpu-scaler", "interval", s.cfg.Interval, "idle", s.cfg.Limits.Idle, "max_age", s.cfg.Limits.MaxAge,
-		"min_credit", s.cfg.Limits.MinCredit, "image", s.cfg.Image, "label", s.cfg.Label, "state", s.statePath())
+		"min_credit", s.cfg.Limits.MinCredit, "image", s.cfg.Image, "public_image", s.cfg.PublicImage, "label", s.cfg.Label, "state", s.statePath())
 	if s.state.Instance != nil {
 		s.log.Info("scaler: reattaching to instance from state", "instance", s.state.Instance.ID, "rented_at", s.state.Instance.RentedAt)
 	}
@@ -211,7 +217,7 @@ func (s *Scaler) Tick(ctx context.Context) {
 	if err != nil {
 		s.log.Error("scaler: queue", "err", err)
 	} else {
-		o.QueueOK, o.Waiting, o.ActiveLeases = true, st.Waiting, st.ActiveLeases
+		o.QueueOK, o.Waiting, o.ActiveLeases, o.WaitingInternal = true, st.Waiting, st.ActiveLeases, st.WaitingInternal
 	}
 
 	instances, err := s.vast.ShowInstances(ctx)
@@ -223,6 +229,7 @@ func (s *Scaler) Tick(ctx context.Context) {
 	s.reconcile(ctx, instances)
 	if s.state.Instance != nil {
 		o.HaveInstance, o.RentedAt = true, s.state.Instance.RentedAt
+		o.InstancePublic = s.state.Instance.Stack == "public"
 		for i := range instances {
 			if instances[i].ID == s.state.Instance.ID {
 				o.Listed = &instances[i]
@@ -411,9 +418,13 @@ func (s *Scaler) rent(ctx context.Context, o Observation) {
 		fail(fmt.Errorf("no offer matches %q", s.cfg.OfferQuery))
 		return
 	}
-	s.log.Info("scaler: renting", "offer", offer.ID, "gpu", offer.GPU, "dph", offer.DPH, "geo", offer.Geo, "reliability", offer.Reliability, "direct_ports", offer.DirectPorts, "waiting", o.Waiting, "credit", o.Credit)
+	image, stack := s.cfg.Image, ""
+	if s.cfg.PublicImage != "" && o.WaitingInternal == 0 {
+		image, stack = s.cfg.PublicImage, "public"
+	}
+	s.log.Info("scaler: renting", "image", image, "offer", offer.ID, "gpu", offer.GPU, "dph", offer.DPH, "geo", offer.Geo, "reliability", offer.Reliability, "direct_ports", offer.DirectPorts, "waiting", o.Waiting, "credit", o.Credit)
 	id, err := s.vast.CreateInstance(ctx, offer.ID, RentSpec{
-		Image: s.cfg.Image, Login: s.cfg.Login, Label: s.cfg.Label, DiskGB: s.cfg.DiskGB,
+		Image: image, Login: s.cfg.Login, Label: s.cfg.Label, DiskGB: s.cfg.DiskGB,
 		Env: s.runnerEnv(), OnStart: s.onStart(),
 	})
 	if err != nil {
@@ -421,7 +432,7 @@ func (s *Scaler) rent(ctx context.Context, o Observation) {
 		return
 	}
 	// Persist before anything else: a crash here must not orphan the instance.
-	s.state.Instance = &StateInstance{ID: id, OfferID: offer.ID, GPU: offer.GPU, Geo: offer.Geo, DPH: offer.DPH, RentedAt: s.now()}
+	s.state.Instance = &StateInstance{ID: id, OfferID: offer.ID, GPU: offer.GPU, Geo: offer.Geo, DPH: offer.DPH, RentedAt: s.now(), Stack: stack}
 	s.state.IdleSince = time.Time{}
 	s.state.LastRentFailure = time.Time{}
 	s.saveState()

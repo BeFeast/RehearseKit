@@ -25,6 +25,7 @@ import (
 	"github.com/BeFeast/RehearseKit/internal/db/dbtest"
 	"github.com/BeFeast/RehearseKit/internal/gpu"
 	"github.com/BeFeast/RehearseKit/internal/jobs"
+	"github.com/BeFeast/RehearseKit/internal/models"
 	"github.com/BeFeast/RehearseKit/internal/pipeline/wavtest"
 	"github.com/BeFeast/RehearseKit/internal/signed"
 	"github.com/BeFeast/RehearseKit/internal/storage"
@@ -190,7 +191,7 @@ func TestLeaseStateMachine(t *testing.T) {
 		t.Fatalf("incomplete stems: %v", err)
 	}
 	var reports []gpu.StemReport
-	for _, n := range jobs.SixStems {
+	for _, n := range models.SixStems {
 		reports = append(reports, gpu.StemReport{Name: n})
 	}
 	verifyCalls := 0

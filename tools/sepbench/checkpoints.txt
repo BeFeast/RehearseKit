@@ -1,0 +1,5 @@
+scnet_xl_ihf.ckpt ac25975f0f5704f3d1a3c3c251505b7a0f417a22eafe82773440ee4f7e14b74f https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.15/model_scnet_ep_36_sdr_10.0891.ckpt
+scnet_xl_ihf.yaml 54ddcb8aeeae85c8d0e148741e7d87b0fbd38bd21cffa5d59ba124fe1e672f40 https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.15/config_musdb18_scnet_xl_more_wide_v5.yaml
+MelBandRoformer.ckpt 87201f4d31afb5bc79993230fc49446918425574db48c01c405e44f365c7559e https://huggingface.co/KimberleyJSN/melbandroformer/resolve/ac9b0614ab3cd7f77219e18ba494dfd93956c348/MelBandRoformer.ckpt
+config_vocals_mel_band_roformer_kj.yaml f63f38eb1e6e40a7db0dade714a5ae257555dd8748f4e774eae8679275a81926 https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/84b1eac0887756b4f1a9d7a1ff49105939749ed2/configs/KimberleyJensen/config_vocals_mel_band_roformer_kj.yaml
+simo-bsrnn-opt.zip 8699cf8834aab285edb9a303699b0d1727fe5e594a8c1d7c6dbdb45b6e42e012 https://zenodo.org/api/records/17516442/files/simo-bsrnn-opt.zip/content

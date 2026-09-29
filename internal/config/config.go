@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BeFeast/RehearseKit/internal/models"
 )
 
 // Config is the process-wide configuration shared by all rk subcommands.
@@ -74,6 +76,21 @@ type Config struct {
 	// (beat grid + per-stem MIDI) on high6 jobs (RK_TRANSCRIBE_EMAILS,
 	// comma-separated, case-insensitive). Empty disables the feature.
 	TranscribeEmails []string
+	// InternalEmails lists the accounts on the internal model stack
+	// (RK_INTERNAL_EMAILS, comma-separated, case-insensitive): owner and
+	// friends, never sold, allowed research-only and unlicensed weights.
+	// Everyone else, and every anonymous upload, gets the public stack.
+	InternalEmails []string
+}
+
+// StackFor returns the model stack of an account (internal/models).
+func (c Config) StackFor(email string) string {
+	for _, e := range c.InternalEmails {
+		if strings.EqualFold(e, email) {
+			return models.Internal
+		}
+	}
+	return models.Public
 }
 
 // TranscribeAllowed reports whether email may create transcribe jobs.
@@ -89,8 +106,13 @@ func (c Config) TranscribeAllowed(email string) bool {
 // Features lists the feature flags enabled for email (shown to the SPA).
 func (c Config) Features(email string) []string {
 	f := []string{}
-	if c.TranscribeAllowed(email) {
+	internal := c.StackFor(email) == models.Internal
+	// Transcription runs research-licensed adapters: internal accounts only.
+	if internal && c.TranscribeAllowed(email) {
 		f = append(f, "transcribe")
+	}
+	if internal {
+		f = append(f, "internal")
 	}
 	return f
 }
@@ -147,6 +169,7 @@ func FromEnv() (Config, error) {
 			}
 		}
 	}
+	cfg.InternalEmails = splitList(os.Getenv("RK_INTERNAL_EMAILS"))
 	if v := os.Getenv("RK_CORS_ORIGINS"); v != "" {
 		for _, o := range strings.Split(v, ",") {
 			if o = strings.TrimSpace(o); o != "" {
@@ -206,4 +229,15 @@ func FromEnv() (Config, error) {
 func DeriveSigningKey(runnerToken string) []byte {
 	sum := sha256.Sum256([]byte("rk-signing:" + runnerToken))
 	return sum[:]
+}
+
+// splitList parses a comma-separated env value, dropping blanks.
+func splitList(v string) []string {
+	var out []string
+	for _, e := range strings.Split(v, ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
 }

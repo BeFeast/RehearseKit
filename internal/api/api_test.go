@@ -184,7 +184,7 @@ func TestHealthConfigAndSPA(t *testing.T) {
 	if err := json.Unmarshal(body, &cfg); err != nil || resp.StatusCode != 200 {
 		t.Fatalf("config %d %s", resp.StatusCode, body)
 	}
-	if cfg["google_client_id"] != "gid" || cfg["google_sign_in"] != true || cfg["anon_retention_hours"].(float64) != 24 || cfg["job_retention_days"].(float64) != 7 || len(cfg["qualities"].([]any)) != 3 {
+	if cfg["google_client_id"] != "gid" || cfg["google_sign_in"] != true || cfg["anon_retention_hours"].(float64) != 24 || cfg["job_retention_days"].(float64) != 7 || !strings.Contains(string(body), `"qualities":[{"id":"high","label":"Standard","model":"SCNet XL","stems":4},{"id":"hifi","label":"Plus HiFi","model":"RoFormer vocals + SCNet XL","stems":4}]`) {
 		t.Errorf("config: %v", cfg)
 	}
 	resp, body = e.do(c, "GET", "/api/v1/nope", nil, nil)
@@ -485,7 +485,7 @@ func TestJobCreateValidation(t *testing.T) {
 		t.Fatalf("youtube: %d %s", resp.StatusCode, body)
 	}
 	j := decodeJob(t, body)
-	if j.InputType != "youtube" || j.InputURL == nil || j.ProjectName != "Tube" || j.ClaimToken == "" || j.Quality != "fast" {
+	if j.InputType != "youtube" || j.InputURL == nil || j.ProjectName != "Tube" || j.ClaimToken == "" || j.Quality != "high" || j.Stack != "public" || j.Model != "scnet_xl_ihf" {
 		t.Errorf("youtube job: %+v", j)
 	}
 	// Long multi-byte names are cut on a rune boundary, never mid-rune.
@@ -508,7 +508,10 @@ func TestJobCreateValidation(t *testing.T) {
 }
 
 func TestTranscribeGate(t *testing.T) {
-	e := newEnv(t, func(c *config.Config) { c.TranscribeEmails = []string{"Owner@Example.com"} })
+	e := newEnv(t, func(c *config.Config) {
+		c.TranscribeEmails = []string{"Owner@Example.com", "public@example.com"}
+		c.InternalEmails = []string{"owner@example.com"}
+	})
 	anon := e.client()
 	resp, body, _ := e.upload(anon, 10, map[string]string{"transcribe": "1", "quality": "high6"})
 	if resp.StatusCode != 403 || errCode(body) != "transcribe_not_allowed" {
@@ -525,14 +528,27 @@ func TestTranscribeGate(t *testing.T) {
 	if !strings.Contains(string(body), `"features":[]`) {
 		t.Errorf("me without features: %s", body)
 	}
+	// On the transcribe allowlist but on the public stack: the adapters are
+	// research-licensed, so no transcription and no feature flag.
+	e.createUser("public@example.com", auth.StatusActive)
+	pub := e.client()
+	e.login(pub, "public@example.com")
+	resp, body, _ = e.upload(pub, 10, map[string]string{"transcribe": "1", "quality": "hifi"})
+	if resp.StatusCode != 403 || errCode(body) != "transcribe_not_allowed" {
+		t.Errorf("public stack: %d %s", resp.StatusCode, body)
+	}
+	_, body = e.do(pub, "GET", "/api/v1/auth/me", nil, nil)
+	if !strings.Contains(string(body), `"features":[]`) {
+		t.Errorf("public stack features: %s", body)
+	}
 	e.createUser("owner@example.com", auth.StatusActive)
 	owner := e.client()
 	resp, body = e.do(owner, "POST", "/api/v1/auth/login", map[string]string{"email": "owner@example.com", "password": "password123"}, nil)
-	if resp.StatusCode != 200 || !strings.Contains(string(body), `"features":["transcribe"]`) {
+	if resp.StatusCode != 200 || !strings.Contains(string(body), `"features":["transcribe","internal"]`) {
 		t.Fatalf("login features: %d %s", resp.StatusCode, body)
 	}
 	_, body = e.do(owner, "GET", "/api/v1/auth/me", nil, nil)
-	if !strings.Contains(string(body), `"features":["transcribe"]`) {
+	if !strings.Contains(string(body), `"features":["transcribe","internal"]`) {
 		t.Errorf("me features: %s", body)
 	}
 	resp, body, _ = e.upload(owner, 10, map[string]string{"transcribe": "1", "quality": "high"})
@@ -555,9 +571,80 @@ func TestTranscribeGate(t *testing.T) {
 	if resp.StatusCode != 201 || decodeJob(t, body).Transcribe {
 		t.Errorf("without the flag: %d %s", resp.StatusCode, body)
 	}
+	// Internal 6-stem HiFi (Kim + BS-RoFormer SW) carries guitar and piano too.
+	resp, body, _ = e.upload(owner, 10, map[string]string{"transcribe": "1", "quality": "hifi"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("owner hifi: %d %s", resp.StatusCode, body)
+	}
+	if j := decodeJob(t, body); !j.Transcribe || j.Model != "kim+bs_rofo_sw" || j.Stack != "internal" {
+		t.Errorf("hifi job: %+v", j)
+	}
 	entries, _ := os.ReadDir(filepath.Join(e.dataDir, "jobs"))
-	if len(entries) != 2 {
+	if len(entries) != 3 {
 		t.Errorf("rejected uploads left job dirs behind: %d", len(entries))
+	}
+}
+
+// Entitlement picks the model stack server-side: anonymous and ordinary
+// accounts get the public stack only, whatever quality they ask for.
+func TestModelStacks(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.InternalEmails = []string{"Friend@Example.com"} })
+	anon := e.client()
+	for _, q := range []string{"fast", "high6"} {
+		resp, body, _ := e.upload(anon, 10, map[string]string{"quality": q})
+		if resp.StatusCode != 403 || errCode(body) != "quality_not_available" {
+			t.Errorf("anonymous %s: %d %s", q, resp.StatusCode, body)
+		}
+	}
+	e.createUser("user@example.com", auth.StatusActive)
+	user := e.client()
+	e.login(user, "user@example.com")
+	for q, model := range map[string]string{"high": "scnet_xl_ihf", "hifi": "kim+scnet_xl_ihf"} {
+		for name, c := range map[string]*http.Client{"anonymous": anon, "user": user} {
+			resp, body, _ := e.upload(c, 10, map[string]string{"quality": q})
+			if resp.StatusCode != 201 {
+				t.Fatalf("%s %s: %d %s", name, q, resp.StatusCode, body)
+			}
+			if j := decodeJob(t, body); j.Stack != "public" || j.Model != model {
+				t.Errorf("%s %s: stack %s model %s, want public %s", name, q, j.Stack, j.Model, model)
+			}
+		}
+	}
+	resp, body, _ := e.upload(user, 10, map[string]string{"quality": "fast"})
+	if resp.StatusCode != 403 || errCode(body) != "quality_not_available" {
+		t.Errorf("user fast: %d %s", resp.StatusCode, body)
+	}
+
+	e.createUser("friend@example.com", auth.StatusActive)
+	friend := e.client()
+	e.login(friend, "friend@example.com")
+	for q, model := range map[string]string{"fast": "htdemucs", "high": "htdemucs_ft", "high6": "htdemucs_6s", "hifi": "kim+bs_rofo_sw"} {
+		resp, body, _ := e.upload(friend, 10, map[string]string{"quality": q})
+		if resp.StatusCode != 201 {
+			t.Fatalf("friend %s: %d %s", q, resp.StatusCode, body)
+		}
+		if j := decodeJob(t, body); j.Stack != "internal" || j.Model != model {
+			t.Errorf("friend %s: stack %s model %s, want internal %s", q, j.Stack, j.Model, model)
+		}
+	}
+	_, body = e.do(friend, "GET", "/api/v1/config", nil, nil)
+	if !strings.Contains(string(body), `{"id":"fast"`) || !strings.Contains(string(body), `{"id":"hifi","label":"Plus HiFi","model":"RoFormer vocals + BS-RoFormer SW","stems":6}`) {
+		t.Errorf("internal config: %s", body)
+	}
+	_, body = e.do(friend, "GET", "/api/v1/auth/me", nil, nil)
+	if !strings.Contains(string(body), `"features":["internal"]`) {
+		t.Errorf("internal features: %s", body)
+	}
+	_, body = e.do(user, "GET", "/api/v1/config", nil, nil)
+	if strings.Contains(string(body), `"fast"`) || strings.Contains(string(body), "Demucs") {
+		t.Errorf("public config leaks internal presets: %s", body)
+	}
+
+	// The database refuses a public job on internal weights even if code
+	// ever tried to write one.
+	_, err := e.pool.Exec(context.Background(), `UPDATE jobs SET model = 'htdemucs_ft' WHERE stack = 'public'`)
+	if err == nil || !strings.Contains(err.Error(), "jobs_public_model_check") {
+		t.Errorf("public job on Demucs accepted by the database: %v", err)
 	}
 }
 
@@ -1232,7 +1319,10 @@ func TestGoogleSignIn(t *testing.T) {
 // --- drum editor: access rules on an owned transcribe job ---
 
 func TestDrumEditsAccess(t *testing.T) {
-	e := newEnv(t, func(c *config.Config) { c.TranscribeEmails = []string{"owner@example.com"} })
+	e := newEnv(t, func(c *config.Config) {
+		c.TranscribeEmails = []string{"owner@example.com"}
+		c.InternalEmails = []string{"owner@example.com"}
+	})
 	e.createUser("owner@example.com", auth.StatusActive)
 	e.createUser("other@example.com", auth.StatusActive)
 	owner, other, anon := e.client(), e.client(), e.client()

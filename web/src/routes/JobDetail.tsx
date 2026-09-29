@@ -21,7 +21,7 @@ import { Transport } from '../components/mixer/Transport';
 import { Waveform } from '../components/mixer/Waveform';
 import { formatLoopSummary, formatRelative, hoursUntil } from '../lib/format';
 import { isSilenced } from '../lib/mix-state';
-import { canCancel, isActive, LAMPS, lampStates, overallProgress, STAGE_COPY, stageNoun, stemModelCaption } from '../lib/stages';
+import { canCancel, isActive, jobModel, LAMPS, lampStates, modelName, overallProgress, STAGE_COPY, stageNoun, stemModelCaption } from '../lib/stages';
 import { useAppNavigate } from '../lib/use-app-navigate';
 import { useDrumEditor, type DrumEditorHandle } from '../player/use-drum-editor';
 import { useMixer, type Mixer } from '../player/use-mixer';
@@ -316,7 +316,7 @@ function JobPage({ job, lastEvent, frozenAt }: { job: Job; lastEvent: JobEvent |
                   ) : undefined
                 }
               >
-                The mixer unlocks the moment Demucs finishes. Progress updates live — you can leave this page and come back.
+                The mixer unlocks the moment separation finishes. Progress updates live — you can leave this page and come back.
               </PanelNotice>
             </>
           ) : job.status === 'failed' ? (
@@ -427,7 +427,7 @@ function MixerPanel({ job, onDownload }: { job: Job; onDownload(): void }) {
       ? ed.status === 'ready'
         ? `Drum stem · ${ed.state.hits.length} hits · ${ed.data?.model.adapter ?? 'model'} + edits`
         : 'Drum stem'
-      : `Song stems · ${job.quality === 'high6' ? 'Demucs HT 6s' : 'Demucs HT'}`;
+      : `Song stems · ${modelName(jobModel(job))}`;
 
   return (
     <>
@@ -512,7 +512,7 @@ function DesktopMixer({ m }: { m: Mixer }) {
               key={stem}
               stem={stem}
               index={i}
-              caption={stemModelCaption(m.job.quality, stem)}
+              caption={stemModelCaption(jobModel(m.job), stem)}
               position={s.position}
               muted={s.muted}
               silenced={isSilenced(mix, stem)}

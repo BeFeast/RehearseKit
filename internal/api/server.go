@@ -21,6 +21,7 @@ import (
 	"github.com/BeFeast/RehearseKit/internal/drums"
 	"github.com/BeFeast/RehearseKit/internal/gpu"
 	"github.com/BeFeast/RehearseKit/internal/jobs"
+	"github.com/BeFeast/RehearseKit/internal/models"
 	"github.com/BeFeast/RehearseKit/internal/signed"
 	"github.com/BeFeast/RehearseKit/internal/stems"
 	"github.com/BeFeast/RehearseKit/internal/storage"
@@ -50,6 +51,7 @@ func New(cfg config.Config, pool *pgxpool.Pool) (*Server, error) {
 		AnonRetention:     cfg.AnonRetention,
 		UserRetention:     cfg.JobRetention,
 		TranscribeAllowed: cfg.TranscribeAllowed,
+		StackFor:          cfg.StackFor,
 	})
 
 	mux := http.NewServeMux()
@@ -67,8 +69,12 @@ func New(cfg config.Config, pool *pgxpool.Pool) (*Server, error) {
 	})
 	ytdlp := youtube.LookPath()
 	ytHandlers := youtube.NewHandlers(youtube.NewService(ytdlp, youtube.Options{}), ytdlp.Available(), youtube.HandlerOptions{})
-	mux.HandleFunc("GET /api/v1/config", func(w http.ResponseWriter, _ *http.Request) {
-		respond.JSON(w, http.StatusOK, publicConfig(cfg, ytHandlers.Available()))
+	mux.HandleFunc("GET /api/v1/config", func(w http.ResponseWriter, r *http.Request) {
+		stack := models.Public
+		if u := auth.UserFrom(r.Context()); u != nil {
+			stack = cfg.StackFor(u.Email)
+		}
+		respond.JSON(w, http.StatusOK, publicConfig(cfg, ytHandlers.Available(), stack))
 	})
 	var google *googleid.Verifier
 	if cfg.GoogleClientID != "" {
@@ -148,7 +154,25 @@ type qualityInfo struct {
 	Stems int    `json:"stems"`
 }
 
-func publicConfig(cfg config.Config, youtubePreview bool) map[string]any {
+// qualityLabels are the product names of the presets.
+var qualityLabels = map[string]string{
+	jobs.QualityFast:  "Fast",
+	jobs.QualityHigh:  "Standard",
+	jobs.QualityHigh6: "Standard + guitar/piano",
+	jobs.QualityHiFi:  "Plus HiFi",
+}
+
+// qualitiesFor lists the presets a stack offers with the recipe behind each.
+func qualitiesFor(stack string) []qualityInfo {
+	out := []qualityInfo{}
+	for _, q := range models.Qualities(stack) {
+		rc, _ := models.RecipeFor(stack, q)
+		out = append(out, qualityInfo{ID: q, Label: qualityLabels[q], Model: rc.Label, Stems: rc.StemCount})
+	}
+	return out
+}
+
+func publicConfig(cfg config.Config, youtubePreview bool, stack string) map[string]any {
 	return map[string]any{
 		"google_client_id":     cfg.GoogleClientID,
 		"google_sign_in":       cfg.GoogleClientID != "",
@@ -158,10 +182,6 @@ func publicConfig(cfg config.Config, youtubePreview bool) map[string]any {
 		"max_upload_bytes":     cfg.MaxUploadBytes,
 		"anon_retention_hours": int(cfg.AnonRetention.Hours()),
 		"job_retention_days":   int(cfg.JobRetention.Hours() / 24),
-		"qualities": []qualityInfo{
-			{ID: jobs.QualityFast, Label: "Fast", Model: "htdemucs", Stems: 4},
-			{ID: jobs.QualityHigh, Label: "High quality", Model: "htdemucs_ft", Stems: 4},
-			{ID: jobs.QualityHigh6, Label: "High quality + guitar/piano", Model: "htdemucs_6s", Stems: 6},
-		},
+		"qualities":            qualitiesFor(stack),
 	}
 }
